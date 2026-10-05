@@ -1,0 +1,14 @@
+{
+  "name": "blef-game",
+  "version": "1.0.0",
+  "description": "Blef - Polish card game in browser",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "npm --prefix client install && npm --prefix server install",
+    "build": "npm --prefix client run build",
+    "start": "node server/index.js",
+    "dev:client": "npm --prefix client run dev",
+    "test": "node client/test-engine.mjs"
+  }
+}
