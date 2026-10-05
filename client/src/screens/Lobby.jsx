@@ -192,16 +192,48 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
     setPlayers((prev) => prev.filter((p) => p.id !== id))
   }
 
-  const copyCode = () => {
-    navigator.clipboard?.writeText(room.code)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+  // Clipboard API only exists in secure contexts (https / localhost) - on a plain
+  // http://<lan-ip> address it is missing or blocked, so fall back to the old
+  // textarea + execCommand trick. Returns true only when something was copied.
+  const copyText = async (text) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text)
+        return true
+      }
+    } catch {
+      // clipboard blocked -> legacy path below
+    }
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.setAttribute('readonly', '')
+      ta.style.position = 'fixed'
+      ta.style.top = '-1000px'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      ta.setSelectionRange?.(0, text.length) // iOS
+      const ok = document.execCommand('copy')
+      ta.remove()
+      return ok
+    } catch {
+      return false
+    }
   }
 
-  const copyLink = () => {
-    navigator.clipboard?.writeText(`${window.location.origin}/?room=${room.code}`)
-    setCopiedLink(true)
-    setTimeout(() => setCopiedLink(false), 1500)
+  const copyCode = async () => {
+    if (await copyText(room.code)) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }
+  }
+
+  const copyLink = async () => {
+    if (await copyText(`${window.location.origin}/?room=${room.code}`)) {
+      setCopiedLink(true)
+      setTimeout(() => setCopiedLink(false), 1500)
+    }
   }
 
   const start = () => {
