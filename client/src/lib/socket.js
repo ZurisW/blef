@@ -7,6 +7,7 @@ import { io } from 'socket.io-client'
 const URL = import.meta.env.DEV ? undefined : undefined
 
 export const socket = io(URL, { 
+  path: '/blef/socket.io',
   reconnection: true, 
   reconnectionAttempts: 20,
   transports: ['polling', 'websocket'],

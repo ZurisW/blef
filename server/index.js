@@ -24,7 +24,7 @@ app.use(cors({ origin: true, credentials: true }))
 app.use(express.json({ limit: '1mb' }))
 
 // read-only state dump for debugging (no secrets, hands stay out of it)
-app.get('/debug/:code', (req, res) => {
+app.get(['/debug/:code', '/blef/debug/:code'], (req, res) => {
   const room = rooms.get(String(req.params.code || '').toUpperCase())
   if (!room) return res.status(404).json({ err: 'no room' })
   const g = room.game
@@ -48,6 +48,7 @@ app.get('/debug/:code', (req, res) => {
 
 const httpServer = createServer(app)
 const io = new Server(httpServer, {
+  path: process.env.SOCKET_PATH || '/blef/socket.io',
   cors: { origin: '*', methods: ['GET', 'POST'] },
   maxHttpBufferSize: 1e6,
 })
@@ -487,8 +488,9 @@ function handleLeave(socket) {
 // ---------- production: serve the built client (vite outDir is ../dist) ----------
 const dist = path.join(__dirname, '..', 'dist')
 if (existsSync(dist)) {
+  app.use('/blef', express.static(dist))
   app.use(express.static(dist))
-  app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')))
+  app.get(['/blef', '/blef/*', '*'], (_req, res) => res.sendFile(path.join(dist, 'index.html')))
 }
 
 httpServer.listen(PORT, '0.0.0.0', () => {

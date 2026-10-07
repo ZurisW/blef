@@ -167,7 +167,8 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
   }
 
   const copyLink = async () => {
-    if (await copyText(`${window.location.origin}/?room=${room.code}`)) {
+    const basePath = window.location.pathname.replace(/\/$/, '')
+    if (await copyText(`${window.location.origin}${basePath}/?room=${room.code}`)) {
       setCopiedLink(true)
       setTimeout(() => setCopiedLink(false), 1500)
     }
