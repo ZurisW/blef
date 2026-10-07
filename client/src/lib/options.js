@@ -1,17 +1,27 @@
 // Per-player options (localStorage) - accessibility + quality-of-life toggles.
-// They live below the table/card customisation in the lobby gear popup.
+// They live in the lobby gear popup AND in the main menu (landing gear).
 const KEY = 'blef.options'
 
 export const DEFAULTS = {
   reveal: true, // popup showing the cards revealed after a full rotation
-  highlight: true, // amber ring around the declared rank when a check happens
+  noPile: false, // never collapse the table into a pile - rows always visible, heavy overlap
+  readablePile: true, // pile with bigger cards + wider spread (rank corners visible)
+  compactFooter: false, // shorter bid grid stretched to the full width
   reduceMotion: false, // kill entry/transition animations
-  uiScale: 'auto', // 'auto' = follow screen size, or a fixed px root size
+}
+
+// keep only known keys (an old uiScale/highlight value must not survive)
+function sanitize(raw) {
+  const out = {}
+  for (const k of Object.keys(DEFAULTS)) {
+    if (typeof raw[k] === typeof DEFAULTS[k]) out[k] = raw[k]
+  }
+  return out
 }
 
 export function loadOptions() {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') }
+    return { ...DEFAULTS, ...sanitize(JSON.parse(localStorage.getItem(KEY) || '{}')) }
   } catch {
     return { ...DEFAULTS }
   }
@@ -19,14 +29,11 @@ export function loadOptions() {
 
 export function applyOptions(opts) {
   const o = opts || loadOptions()
-  const el = document.documentElement
-  el.classList.toggle('reduce-motion', !!o.reduceMotion)
-  // fixed scale overrides the media queries; 'auto' hands control back to CSS
-  el.style.fontSize = !o.uiScale || o.uiScale === 'auto' ? '' : o.uiScale
+  document.documentElement.classList.toggle('reduce-motion', !!o.reduceMotion)
 }
 
 export function saveOptions(opts) {
-  const next = { ...DEFAULTS, ...opts }
+  const next = { ...DEFAULTS, ...sanitize(opts) }
   try {
     localStorage.setItem(KEY, JSON.stringify(next))
   } catch {

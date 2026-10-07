@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import canvasConfetti from 'canvas-confetti'
 import PlayingCard from './PlayingCard'
 import Avatar from './Avatar'
-import { loadOptions } from '../lib/options'
 
 // Check animation stages:
 // 0 -> "SPRAWDZAM!" banner, 1 -> revealed hands + the table cards (cards view only, everything
@@ -64,20 +63,16 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
   }, [stage, r, state.phase])
 
   // Multiplayer: the loser starts the next round, so THEY click.
-  // After the click -> 5 s and a new round; without a click -> auto after 10 s.
-  // In the local demo bots "click" on their own after 5 s.
+  // After the click -> 3 s and a new round; without a click -> auto after 5 s.
   // Countdown starts with the cards (stage 1) so the numbers already track the server
   // timer when the buttons appear at stage 2.
-  const [left, setLeft] = useState(10)
+  const [left, setLeft] = useState(5)
   const [goClicked, setGoClicked] = useState(false)
   useEffect(() => {
     if (stage !== 1 || !r || state.phase !== 'roundEnd') return
     setGoClicked(false)
-    // the countdown mirrors the server delay: bots/disconnected seats advance after 5 s,
-    // a human loser (you) gets 10 s - the local demo makes bots click after 5 s as well
-    const loser = state.players.find((p) => p.id === r.loserId)
-    const fast = loser?.isBot || loser?.connected === false
-    setLeft(r.loserIsYou || !fast ? 10 : 5)
+    // the countdown mirrors the server delay: everyone advances after 5 s without a click
+    setLeft(5)
   }, [stage, r, state.phase])
 
   useEffect(() => {
@@ -98,9 +93,8 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
   const existing = r.tableCards.slice(0, finalStart)
   const fin = r.tableCards.slice(finalStart)
   const narrow = typeof window !== 'undefined' && window.innerWidth < 640
-  // amber ring around the declared rank + jokers (can be switched off in Opcje dostępności)
-  const opts = loadOptions()
-  const hl = (c) => opts.highlight && (c.isJoker || c.value === r.bid.value)
+  // amber ring around the declared rank + jokers (always on)
+  const hl = (c) => c.isJoker || c.value === r.bid.value
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex p-4 overflow-y-auto">
@@ -237,8 +231,8 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
                         type="button"
                         onClick={() => {
                           setGoClicked(true)
-                          setLeft(5)
-                          // online the server starts its 5 s window right away;
+                          setLeft(3)
+                          // online the server starts its 3 s window right away;
                           // local demo waits for the countdown below
                           if (instantGo) onNext()
                         }}

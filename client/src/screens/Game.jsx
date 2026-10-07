@@ -98,10 +98,11 @@ export default function Game({ profile, room, onExit }) {
   const [handOpen, setHandOpen] = useState(false) // phone: own hand expanded (otherwise only the tops show)
   // how many batch rows fit on the table (measured, no scrolling) and whether the
   // stage is roomy enough for the bigger (md) table cards
-  const [fit, setFit] = useState({ rows: 3, md: false })
+  const [fit, setFit] = useState({ rows: 3, size: 'md', rowH: 80, cover: 0.5, avail: 0 })
   const [reveal, setReveal] = useState(null) // transient popup: cards just revealed by a rotation
   const batchesRef = useRef(null)
   const opts = useMemo(() => loadOptions(), [])
+  const cf = opts.compactFooter // shorter, stretched footer
 
   useEffect(() => {
     if (!online) return
@@ -121,24 +122,47 @@ export default function Game({ profile, room, onExit }) {
     else localDispatch(action)
   }
 
-  // how many batch rows fit in the available space - no scrolling, no scrollbar.
-  // Everything is measured in root pixels (uiScale) so cards growing with the
-  // screen on big monitors stay in sync; a roomy stage gets the bigger md cards.
+  // Table rows: 4 rows of 3 cards on desktop, 3 rows on smaller screens, 2 rows
+  // on the phone - past that the table collapses into the pile. A new row covers
+  // the one above by half (up to 75% when the stage is tight) so the rank corners
+  // stay readable up to the last row. Cards take the biggest size that still
+  // fits the target rows: lg -> md -> sm. Measured in root pixels (uiScale).
   useEffect(() => {
     const el = batchesRef.current
     if (!el) return
     const calc = () => {
       const s = uiScale()
-      const space = el.clientHeight + 6 * s // + slack for slight card rotation
-      const isNarrow = window.innerWidth < 640
-      const mdRow = (80 + 8) * s // md card h-20 + gap-2
-      const smRow = (56 + 8) * s // sm card h-14 + gap-2
-      const md = !isNarrow && space / mdRow >= 2 // md only when at least 2 rows fit
-      const rows = Math.floor(space / (md ? mdRow : smRow))
-      const cap = isNarrow ? 2 : 4 // phone: collapse into the pile sooner
+      // exact container height: the fitted rows must NOT overflow (they used to
+      // clip the bottom row) - card rotation sticks out ~1px, tolerable.
+      // The final (+5) batch wears a ring with py-1 - reserve its 8px so it
+      // doesn't clip at the bottom either.
+      const batches = state.tableBatches
+      const lastB = batches.length ? batches[batches.length - 1] : null
+      const finalExtra = lastB && lastB.type === 'final' ? 8 : 0
+      const space = Math.max(40, el.clientHeight - finalExtra)
+      const w = window.innerWidth
+      const target = w < 640 ? 2 : w < 1024 ? 3 : 4
+      const sizes = [['lg', 112], ['md', 80], ['sm', 56]]
+      let size = 'sm', rowH = 56 * s, cover = 0.75
+      for (const [name, hpx] of sizes) {
+        const h = hpx * s
+        const strideNeed = target > 1 ? (space - h) / (target - 1) : h
+        const coverNeed = 1 - strideNeed / h
+        size = name
+        rowH = h
+        if (strideNeed > 0 && coverNeed <= 0.75) {
+          cover = Math.min(0.75, Math.max(0.5, coverNeed))
+          break
+        }
+        cover = 0.75 // this size needs max overlap - try a smaller size first
+      }
+      const stride = rowH * (1 - cover)
+      // +0.05 so float rounding can't drop the last row when cover was derived exactly
+      const rows = Math.max(1, Math.min(target, Math.floor((space - rowH) / stride + 0.05) + 1))
       setFit((prev) => {
-        const next = { rows: Math.max(0, Math.min(cap, rows)), md }
-        return prev.rows === next.rows && prev.md === next.md ? prev : next
+        const next = { rows, size, rowH, cover, avail: el.clientHeight }
+        return prev.rows === next.rows && prev.size === next.size && prev.rowH === next.rowH &&
+          prev.cover === next.cover && prev.avail === next.avail ? prev : next
       })
     }
     calc()
@@ -201,20 +225,61 @@ export default function Game({ profile, room, onExit }) {
   const moves = useMemo(() => legalMoves(state.currentBid, state.maxCount), [state.currentBid, state.maxCount])
   const back = room?.cardBack || null
 
-  // Table: when all batches fit we show rows (3 cards each).
-  // When there are too many (around the 5th rotation) the whole table collapses into
-  // one realistic pile; a click opens a popup with the exact cards.
-  const showPileOnly = state.tableBatches.length > fit.rows
+  // Table: when all batches fit we show rows (3 cards each) with the cards overlapping
+  // (half over the neighbour - the rank corner stays visible).
+  // Around the 5th rotation the table collapses into a realistic pile (unless the
+  // "Wyłącz kupkę" option is on - then the rows keep squeezing together instead);
+  // a click on the pile opens a popup with the exact cards.
+  const showPileOnly = !opts.noPile && state.tableBatches.length > fit.rows
   const hiddenCards = state.tableCards
 
-  // pile geometry (compact, independent of the card count) - in root pixels,
-  // the xs cards scale with the root font size like everything else
-  const pcols = 6
-  const prows = Math.max(1, Math.ceil(hiddenCards.length / pcols))
-  const pstepX = 11 * s
-  const pstepY = prows > 1 ? Math.max(2, Math.min(9, Math.floor(12 / (prows - 1)))) * s : 0
-  const pileW = (pcols - 1) * pstepX + (32 + 8) * s
-  const pileH = (prows - 1) * pstepY + (44 + 8) * s
+  // pile geometry - in root pixels (cards scale with the root font size).
+  // Compact by default is a tidy little stack (it is clickable anyway); the
+  // "Czytelna kupka" option (on by default) spreads it with md cards and steps
+  // big enough that every rank corner stays visible without opening the popup.
+  const n = hiddenCards.length
+  const availH = fit.avail || 130
+  const readable = !!opts.readablePile
+  let pcols, prows, pstepX, pstepY, pileW, pileH
+  if (readable) {
+    const pcW = 56 * s
+    const pcH = 80 * s
+    const stepXw = 18 * s // shows the rank glyph of every card
+    const stepYw = 26 * s // shows the whole rank corner of every row
+    const maxRowsH = Math.max(1, Math.floor((availH - pcH - 8 * s) / stepYw) + 1)
+    const maxColsW = Math.max(4, Math.floor((vw * 0.92 - pcW - 8 * s) / stepXw) + 1)
+    // prefer a ~6 column stack (like the compact pile), grow when height demands it
+    const wanted = Math.max(Math.min(6, n), Math.ceil(n / maxRowsH))
+    pcols = Math.max(1, Math.min(wanted, maxColsW))
+    prows = Math.max(1, Math.ceil(n / pcols))
+    pstepX = stepXw
+    pstepY = prows > 1 ? Math.max(6, Math.min(stepYw, (availH - pcH - 8 * s) / (prows - 1))) : 0
+    pileW = (pcols - 1) * pstepX + pcW + 8 * s
+    pileH = (prows - 1) * pstepY + pcH + 8 * s
+  } else {
+    pcols = 6
+    prows = Math.max(1, Math.ceil(n / pcols))
+    pstepX = 14 * s
+    pstepY = prows > 1 ? Math.max(3, Math.min(14, Math.floor(18 / (prows - 1)))) * s : 0
+    pileW = (pcols - 1) * pstepX + (40 + 8) * s
+    pileH = (prows - 1) * pstepY + (56 + 8) * s
+  }
+
+  // rows are FULL width (no side overlap) and stack top-down: a new row covers
+  // the one above by half (up to 75% when space is tight - rank corners stay
+  // visible). With "Wyłącz kupkę" the stack squeezes harder when it outgrows
+  // the space (rows keep the newest ones fully visible, the rest clip from below).
+  const batchCount = state.tableBatches.length
+  let rowStride = fit.rowH * (1 - fit.cover)
+  if (opts.noPile && batchCount > 1 && fit.avail > 0) {
+    const need = fit.rowH + (batchCount - 1) * rowStride
+    if (need > fit.avail) {
+      const availStride = (fit.avail - fit.rowH) / (batchCount - 1)
+      rowStride = Math.max(fit.rowH * 0.15, Math.min(rowStride, availStride))
+    }
+  }
+  // the flex gap-2 between rows is subtracted so the final stride stays exact
+  const rowMargin = rowStride - fit.rowH - 8 * s
 
   // ---- local demo AI: when it is someone else's turn, "think" then act ----
   // (online bots are driven by the server - this effect only runs in local mode)
@@ -350,24 +415,23 @@ export default function Game({ profile, room, onExit }) {
 
       {/* ---------- Table stage ---------- */}
       <main className="relative flex-1 min-h-0 overflow-hidden">
-        {/* popup: cards just revealed onto the table (auto-hides, never blocks clicks).
-            Centred with inset-x-0 + items-center - no transform, because the pop-in
-            animation owns transform: scale and would undo translate-x. Over the table,
-            clear of the top opponent seats. */}
+        {/* popup: a window in the top-left (starting about at the middle of the deck)
+            so it never blocks the cards landing in the centre. Auto-hides, never blocks
+            clicks - kept big so the 3 seconds are enough to see the cards. */}
         {reveal && (
-          <div
-            key={reveal.id}
-            className="absolute inset-x-0 top-[38%] z-20 pop-in flex flex-col items-center gap-1.5 pointer-events-none"
-          >
-            <div className="rounded-full bg-slate-950/85 border border-amber-400/40 px-3.5 py-1 text-[0.6875rem] uppercase tracking-widest text-amber-200 shadow-lg whitespace-nowrap">
-              Na stół trafia {reveal.cards.length === 3 ? '3 karty' : `${reveal.cards.length} kart`}
-            </div>
-            <div className="flex gap-1.5 drop-shadow-2xl">
-              {reveal.cards.map((c, i) => (
-                <span key={c.id} className="deal-in inline-block" style={{ animationDelay: `${i * 70}ms` }}>
-                  <PlayingCard card={c} size="md" />
-                </span>
-              ))}
+          <div key={reveal.id} className="absolute left-[calc(4%+2rem)] top-[10%] z-20 pop-in pointer-events-none">
+            <div className="rounded-2xl border border-amber-400/40 bg-slate-950/90 backdrop-blur-sm shadow-2xl px-4 py-2.5 flex flex-col items-center gap-2">
+              <div className="text-sm uppercase tracking-widest text-amber-200 whitespace-nowrap">
+                Na stół trafia {reveal.cards.length === 3 ? '3 karty' : `${reveal.cards.length} kart`}
+              </div>
+              <div className="flex gap-2.5">
+                {reveal.cards.map((c, i) => (
+                  <span key={c.id} className="deal-in inline-block" style={{ animationDelay: `${i * 70}ms` }}>
+                    {/* big enough to read from across the room - xl on the desktop */}
+                    <PlayingCard card={c} size={narrow ? 'lg' : 'xl'} />
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -467,11 +531,11 @@ export default function Game({ profile, room, onExit }) {
         })}
 
         {/* centre: batch rows or just the pile + your hand "lying on the table" at the bottom */}
-        <div className="absolute inset-x-0 top-[41%] bottom-0 flex flex-col items-center justify-end gap-2 px-2 pointer-events-none">
+        <div className="absolute inset-x-0 top-[36%] bottom-0 flex flex-col items-center justify-end gap-1 px-2 pointer-events-none">
           <div
             ref={batchesRef}
             className={`flex-1 min-h-0 w-full flex flex-col items-center gap-2 overflow-hidden pointer-events-auto ${
-              state.tableBatches.length === 0 || showPileOnly ? 'justify-center' : 'justify-end'
+              state.tableBatches.length === 0 || showPileOnly ? 'justify-center' : 'justify-start'
             }`}
           >
             {state.tableBatches.length === 0 ? (
@@ -506,11 +570,11 @@ export default function Game({ profile, room, onExit }) {
                           animationDelay: `${Math.min(i, 8) * 45}ms`,
                         }}
                       >
-                        <PlayingCard card={c} size="xs" />
+                        <PlayingCard card={c} size={readable ? 'md' : 'sm'} />
                       </span>
                     )
                   })}
-                  <span className="absolute -top-2 -right-3 z-50 text-[0.625rem] font-bold bg-amber-400 text-slate-900 rounded-full px-1.5 py-0.5 shadow-md leading-none">
+                  <span className="absolute top-0.5 right-0.5 z-50 text-[0.625rem] font-bold bg-amber-400 text-slate-900 rounded-full px-1.5 py-0.5 shadow-md leading-none">
                     {hiddenCards.length}
                   </span>
                 </button>
@@ -521,14 +585,23 @@ export default function Game({ profile, room, onExit }) {
                 <div
                   key={bi}
                   className={`flex gap-1 ${batch.type === 'final' ? 'rounded-lg ring-1 ring-amber-400/50 bg-amber-500/10 px-1.5 py-1' : ''}`}
+                  style={{
+                    // later rows paint above the earlier ones and cover them halfway
+                    position: 'relative',
+                    zIndex: bi,
+                    marginTop: bi ? rowMargin : undefined,
+                  }}
                 >
                   {batch.cards.map((c, ci) => (
                     <span
                       key={c.id}
                       className="deal-in inline-block"
-                      style={{ transform: `rotate(${((ci % 3) - 1) * 2}deg)`, animationDelay: `${ci * 60}ms` }}
+                      style={{
+                        transform: `rotate(${((ci % 3) - 1) * 2}deg)`,
+                        animationDelay: `${ci * 60}ms`,
+                      }}
                     >
-                      <PlayingCard card={c} size={fit.md ? 'md' : 'sm'} />
+                      <PlayingCard card={c} size={fit.size} />
                     </span>
                   ))}
                 </div>
@@ -596,14 +669,15 @@ export default function Game({ profile, room, onExit }) {
               onSelect={setSelected}
               disabled={!yourTurn}
               maxCount={state.maxCount}
+              compact={cf}
             />
           </div>
         </div>
 
         {/* right column: avatar + status, current bid, buttons - every row has a fixed height */}
-        <div className="w-full md:w-64 shrink-0 flex flex-col gap-1">
-          {/* row 1 (h-9): our avatar + who plays / what we are picking */}
-          <div className="h-9 flex items-center justify-center gap-2">
+        <div className={`w-full ${cf ? 'md:w-72' : 'md:w-64'} shrink-0 flex flex-col gap-1`}>
+          {/* row 1: our avatar + who plays / what we are picking */}
+          <div className={`${cf ? 'h-7' : 'h-9'} flex items-center justify-center gap-2`}>
             <span
               className={`w-7 h-7 rounded-full flex items-center justify-center text-sm border-2 shrink-0 transition-all ${
                 yourTurn
@@ -641,14 +715,14 @@ export default function Game({ profile, room, onExit }) {
             </span>
           </div>
 
-          {/* row 2 (h-9): who raised - always sits above the PODBIJ button */}
+          {/* row 2: who raised - always sits above the PODBIJ button */}
           <div
             key={state.currentBid ? `${state.currentBid.count}-${state.currentBid.value}-${state.round}` : 'no-bid'}
-            className="pop-in h-9 flex items-center justify-center gap-2 rounded-xl border-2 border-amber-400/60 bg-slate-950/80 px-3 shadow-lg"
+            className={`pop-in ${cf ? 'h-7' : 'h-9'} flex items-center justify-center gap-2 rounded-xl border-2 border-amber-400/60 bg-slate-950/80 px-3 shadow-lg`}
           >
             {state.currentBid ? (
               <>
-                <span className="text-2xl font-extrabold text-white leading-none">
+                <span className={`${cf ? 'text-xl' : 'text-2xl'} font-extrabold text-white leading-none`}>
                   {state.currentBid.count} <span className="text-amber-400">&times;</span> {state.currentBid.value}
                 </span>
                 <span className="text-[0.6875rem] text-amber-200/80">podbił {state.currentBid.playerName}</span>
@@ -666,7 +740,7 @@ export default function Game({ profile, room, onExit }) {
               type="button"
               onClick={handleBid}
               disabled={!yourTurn || !selected}
-              className="flex-1 md:flex-none w-auto md:w-full py-2 rounded-xl btn-primary disabled:opacity-30 disabled:cursor-not-allowed text-white font-bold text-lg transition-colors"
+              className={`flex-1 md:flex-none w-auto md:w-full ${cf ? 'py-1.5 text-base' : 'py-2 text-lg'} rounded-xl btn-primary disabled:opacity-30 disabled:cursor-not-allowed text-white font-bold transition-colors`}
             >
               PODBIJ
             </button>
@@ -674,14 +748,14 @@ export default function Game({ profile, room, onExit }) {
               type="button"
               onClick={handleCheck}
               disabled={!yourTurn || !state.currentBid}
-              className="flex-1 md:flex-none w-auto md:w-full py-2 rounded-xl bg-amber-400 hover:bg-amber-300 disabled:opacity-30 disabled:cursor-not-allowed text-amber-950 font-bold text-lg transition-all hover:scale-[1.02] shadow-md shadow-amber-500/20"
+              className={`flex-1 md:flex-none w-auto md:w-full ${cf ? 'py-1.5 text-base' : 'py-2 text-lg'} rounded-xl bg-amber-400 hover:bg-amber-300 disabled:opacity-30 disabled:cursor-not-allowed text-amber-950 font-bold transition-all hover:scale-[1.02] shadow-md shadow-amber-500/20`}
             >
               SPRAWDZAM!
             </button>
           </div>
 
           {/* warning line - reserved height so the footer never jumps */}
-          <div className="h-4 text-[0.625rem] text-amber-300 text-center leading-4">
+          <div className={`${cf ? 'h-3.5 leading-3.5' : 'h-4 leading-4'} text-[0.625rem] text-amber-300 text-center`}>
             {yourTurn && state.currentBid && moves.length === 0
               ? '\u26A0 Brak mocniejszych deklaracji - musisz sprawdzić'
               : ''}
@@ -732,8 +806,8 @@ export default function Game({ profile, room, onExit }) {
                   <PlayingCard
                     key={c.id}
                     card={c}
-                    size="sm"
-                    highlight={opts.highlight && (c.isJoker || c.value === state.currentBid?.value)}
+                    size="md"
+                    highlight={c.isJoker || c.value === state.currentBid?.value}
                   />
                 ))}
               </div>

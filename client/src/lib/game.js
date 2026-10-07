@@ -348,9 +348,10 @@ function claimTrueChance(state, bid) {
   const draws = othersCards + finalDraws
   if (draws <= 0) return 0
 
-  // "hits" left outside my hand and the table (rank cards + wild jokers)
+  // "hits" left outside my hand and the table: 4 suit copies + wild jokers,
+  // minus what I can already see (a wrong count here = bots too trusting)
   const unseen = othersCards + state.deck.length
-  const copiesLeft = Math.max(0, 6 * decks - seenSame) + Math.max(0, 2 * decks - seenJokers)
+  const copiesLeft = Math.max(0, 4 * decks - seenSame) + Math.max(0, 2 * decks - seenJokers)
   const p = Math.min(1, copiesLeft / Math.max(1, unseen))
   return pAtLeast(need, draws, p)
 }

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { CircleHelp } from 'lucide-react'
+import { CircleHelp, Settings } from 'lucide-react'
 import Avatar from '../components/Avatar.jsx'
 import HelpModal from '../components/HelpModal.jsx'
+import SettingsModal from '../components/SettingsModal.jsx'
 import { fileToDataUrl } from '../lib/image.js'
 import { emitAck, isConnected } from '../lib/socket.js'
 
@@ -10,6 +11,23 @@ export const AVATARS = [
   '\u{1F43C}', '\u{1F47D}', '\u{1F916}', '\u{1F47B}', '\u{1F989}', '\u{1F427}',
   '\u{1F984}', '\u{1F409}', '\u{1F9B9}', '\u{1F9D9}',
 ]
+
+// remember the last nickname (the avatar is already stored by chooseAvatar)
+function loadNickname() {
+  try {
+    return localStorage.getItem('blef.nickname') || ''
+  } catch {
+    return ''
+  }
+}
+
+function saveNickname(name) {
+  try {
+    localStorage.setItem('blef.nickname', name)
+  } catch {
+    /* ignoruj */
+  }
+}
 
 function loadAvatar() {
   try {
@@ -30,7 +48,7 @@ function loadUploaded() {
 }
 
 export default function Landing({ onEnter }) {
-  const [nickname, setNickname] = useState('')
+  const [nickname, setNickname] = useState(loadNickname)
   const [avatar, setAvatar] = useState(loadAvatar)
   const [uploaded, setUploaded] = useState(loadUploaded)
   const [avatarErr, setAvatarErr] = useState('')
@@ -40,6 +58,7 @@ export default function Landing({ onEnter }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [showHelp, setShowHelp] = useState(false)
+  const [showOpts, setShowOpts] = useState(false)
 
   // shared link: /?room=CODE opens the form ready to join that table
   useEffect(() => {
@@ -92,6 +111,7 @@ export default function Landing({ onEnter }) {
     setError('')
     // 14 chars max - the seat layout shows the whole name without truncating
     const name = nickname.trim().slice(0, 14)
+    saveNickname(name)
 
     if (isConnected()) {
       const res =
@@ -113,7 +133,15 @@ export default function Landing({ onEnter }) {
   return (
     <div className="h-[100dvh] felt overflow-hidden flex p-3 sm:p-4">
       <div className="w-full max-w-md m-auto rounded-2xl border border-amber-500/30 bg-slate-900/85 backdrop-blur shadow-2xl p-4 sm:p-5 relative overflow-hidden">
-        {/* help - how to play (fits on screen, no scrolling) */}
+        {/* settings (personal options) + help - how to play (fits on screen, no scrolling) */}
+        <button
+          type="button"
+          onClick={() => setShowOpts(true)}
+          title="Ustawienia"
+          className="absolute right-[3.5rem] top-3 z-10 w-9 h-9 rounded-full bg-slate-800 border border-white/10 hover:border-amber-300 text-amber-300 flex items-center justify-center transition-colors"
+        >
+          <Settings size={18} />
+        </button>
         <button
           type="button"
           onClick={() => setShowHelp(true)}
@@ -246,6 +274,7 @@ export default function Landing({ onEnter }) {
         </form>
       </div>
 
+      {showOpts && <SettingsModal onClose={() => setShowOpts(false)} />}
       {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
     </div>
   )

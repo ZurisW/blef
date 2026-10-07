@@ -222,14 +222,9 @@ function scheduleRoundEnd(room) {
   clearTimeout(room.roundTimer)
   const g = room.game
   if (!g || g.phase !== 'roundEnd') return
-  const loser = g.players.find((p) => p.id === g.lastRoundLoserId)
-  // bots (and disconnected players) start the next round after 5 s,
-  // a human loser gets 10 s and may click through earlier
-  const delay = room.goClicked
-    ? 5000
-    : !loser || loser.isBot || loser.connected === false
-      ? 5000
-      : 10000
+  // without a click everyone advances after 5 s; after the manual "Następna runda"
+  // click the new round starts after 3 s
+  const delay = room.goClicked ? 3000 : 5000
   logEvent(room, `schedule:${delay}`)
   room.roundTimer = setTimeout(() => advanceRound(room), delay)
 }
@@ -250,13 +245,13 @@ function applyAction(room, pid, action) {
   if (!g || !action || typeof action !== 'object') return false
 
   if (action.type === 'NEXT_ROUND') {
-    // fast path: only the loser may trigger it, once, shrinking the wait to 5 s
+    // fast path: only the loser may trigger it, once, shrinking the wait to 3 s
     if (g.phase !== 'roundEnd' || pid !== g.lastRoundLoserId) return false
     if (!room.goClicked) {
       room.goClicked = true
       logEvent(room, 'fast-click')
       clearTimeout(room.roundTimer)
-      room.roundTimer = setTimeout(() => advanceRound(room), 5000)
+      room.roundTimer = setTimeout(() => advanceRound(room), 3000)
     }
     return true
   }

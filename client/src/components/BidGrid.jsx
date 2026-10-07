@@ -5,7 +5,7 @@ import { uiScale } from '../lib/ui'
 // Bid grid: rows = count, columns = rank (2..A)
 // With two decks a toggle switches the range: 2×-6× / 7×-12×
 // The grid container has a fixed height (fits 6 rows = 7×-12× page) so the footer never jumps.
-export default function BidGrid({ currentBid, selected, onSelect, disabled, maxCount = 6 }) {
+export default function BidGrid({ currentBid, selected, onSelect, disabled, maxCount = 6, compact = false }) {
   const [page, setPage] = useState(0)
   const twoPages = maxCount > 6
   const start = page === 0 ? 2 : 7
@@ -13,13 +13,16 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
   const rows = []
   for (let c = start; c <= end; c++) rows.push(c)
 
-  // fixed container height = 6 rows max (header + 6 rows + gaps),
+  // fixed container height = the rows actually shown (5 rows on 1 deck, 6 rows
+  // on 2 decks - both pages share the height so switching never jumps),
   // in root pixels so it tracks the UI scale on big screens (h-6 = 1.5rem etc.)
+  // compact = shorter rows stretched over the full footer width
   const s = uiScale()
-  const rowH = 24 * s // h-6
-  const gap = 4 * s // gap-1
-  const headerH = 16 * s // rank header row
-  const containerH = Math.round(headerH + 6 * rowH + 5 * gap + 8 * s) // +8 padding
+  const rowH = (compact ? 18 : 24) * s // h-6 / h-[1.125rem]
+  const gap = (typeof window !== 'undefined' && window.innerWidth >= 1024 ? 4 : 2) * s // gap-0.5 lg:gap-1
+  const headerH = (compact ? 14 : 16) * s // rank header row
+  const rowCount = twoPages ? 6 : rows.length
+  const containerH = Math.round(headerH + rowCount * rowH + (rowCount - 1) * gap + 8 * s) // +8 padding
 
   // auto page switch: show the range where legal raises live
   useEffect(() => {
@@ -36,7 +39,7 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
   }, [currentBid, twoPages, maxCount, page])
 
   return (
-    <div className={`w-full max-w-[28.75rem] lg:max-w-[40rem] rounded-xl bg-slate-900/70 border border-white/10 p-1.5 lg:p-2 backdrop-blur transition-opacity ${disabled ? 'opacity-60' : ''}`}>
+    <div className={`w-full rounded-xl bg-slate-900/70 border border-white/10 p-1.5 lg:p-2 backdrop-blur transition-opacity ${compact ? '' : 'max-w-[28.75rem] lg:max-w-[40rem]'} ${disabled ? 'opacity-60' : ''}`}>
       <div className="flex items-center justify-between gap-3 mb-1 pl-1">
         <span className="text-[0.5625rem] lg:text-[0.6875rem] uppercase tracking-widest text-amber-200/70">
           Ile sztuk &#8594; / jaka figura &#8595;
@@ -64,8 +67,10 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
           </div>
         )}
       </div>
-      {/* fixed height container - fits 6 rows so switching pages never changes height */}
-      <div className="w-full overflow-hidden" style={{ height: containerH }}>
+      {/* fixed height container - fits 6 rows so switching pages never changes height.
+          No overflow clip here: a selected cell scales up (scale-110) and its glow
+          on the A column must not be cut off at the right edge. */}
+      <div className="w-full" style={{ height: containerH }}>
         <div
           className="grid w-full gap-0.5 lg:gap-1"
           style={{ gridTemplateColumns: '2.1rem repeat(13, minmax(0, 1fr))' }}
@@ -88,6 +93,7 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
               onSelect={onSelect}
               disabled={disabled}
               maxCount={maxCount}
+              compact={compact}
             />
           ))}
         </div>
@@ -96,7 +102,7 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
   )
 }
 
-function RowCells({ count, currentBid, selected, onSelect, disabled, maxCount }) {
+function RowCells({ count, currentBid, selected, onSelect, disabled, maxCount, compact }) {
   return (
     <>
       <div className="flex items-center justify-center text-[0.625rem] lg:text-xs font-bold text-amber-300/90 pr-1">
@@ -107,8 +113,7 @@ function RowCells({ count, currentBid, selected, onSelect, disabled, maxCount })
         const isCurrent = currentBid && currentBid.count === count && currentBid.value === value
         const isSelected = selected && selected.count === count && selected.value === value
 
-        let cls =
-          'h-6 rounded border text-[0.625rem] lg:text-xs font-semibold transition-all duration-100 flex items-center justify-center '
+        let cls = `${compact ? 'h-[1.125rem]' : 'h-6'} rounded border text-[0.625rem] lg:text-xs font-semibold transition-all duration-100 flex items-center justify-center `
         if (!legal || disabled) {
           cls += 'bg-white/5 border-white/10 text-white/20 cursor-not-allowed'
         } else if (isSelected) {
