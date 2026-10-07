@@ -2,10 +2,12 @@ import { FACE_STYLES, getFaceId, getFaceStyle } from '../lib/faces.js'
 import { getFrontSetId, getFrontSet, isEmojiGlyph, suitGlyph } from '../lib/icons.js'
 
 const SIZES = {
-  xs: { box: 'w-8 h-11 rounded', corner: 'text-[8px]', suitSm: 'text-[7px]', emoji: 'text-[7px]', big: 'text-sm', bigEmoji: 'text-xs' },
-  sm: { box: 'w-10 h-14 rounded-md', corner: 'text-[9px]', suitSm: 'text-[8px]', emoji: 'text-[8px]', big: 'text-xl', bigEmoji: 'text-base' },
-  md: { box: 'w-14 h-20 rounded-lg', corner: 'text-xs', suitSm: 'text-[10px]', emoji: 'text-[10px]', big: 'text-3xl', bigEmoji: 'text-2xl' },
+  xs: { box: 'w-8 h-11 rounded', corner: 'text-[0.5rem]', suitSm: 'text-[0.4375rem]', emoji: 'text-[0.4375rem]', big: 'text-sm', bigEmoji: 'text-xs' },
+  sm: { box: 'w-10 h-14 rounded-md', corner: 'text-[0.5625rem]', suitSm: 'text-[0.5rem]', emoji: 'text-[0.5rem]', big: 'text-xl', bigEmoji: 'text-base' },
+  md: { box: 'w-14 h-20 rounded-lg', corner: 'text-xs', suitSm: 'text-[0.625rem]', emoji: 'text-[0.625rem]', big: 'text-3xl', bigEmoji: 'text-2xl' },
   lg: { box: 'w-20 h-28 rounded-xl', corner: 'text-sm', suitSm: 'text-xs', emoji: 'text-xs', big: 'text-5xl', bigEmoji: 'text-3xl' },
+  // xl = your own hand on a roomy screen (all sizes in rem so they track the UI scale)
+  xl: { box: 'w-24 h-32 rounded-2xl', corner: 'text-base', suitSm: 'text-sm', emoji: 'text-sm', big: 'text-[3.5rem]', bigEmoji: 'text-[2.25rem]' },
 }
 
 const RED_SUITS = ['\u2665', '\u2666'] // ♥ ♦
@@ -292,7 +294,13 @@ export default function PlayingCard({ card, size = 'md', faceDown = false, highl
           {size !== 'xs' && (
             <span
               className={`font-black leading-none tracking-[0.2em] rotate-[-5deg] -mt-1.5 relative ${
-                size === 'lg' ? 'text-[10px]' : size === 'md' ? 'text-[8px]' : 'text-[7px]'
+                size === 'xl'
+                  ? 'text-[0.75rem]'
+                  : size === 'lg'
+                    ? 'text-[0.625rem]'
+                    : size === 'md'
+                      ? 'text-[0.5rem]'
+                      : 'text-[0.4375rem]'
               }`}
               style={{ color: f.black }}
             >

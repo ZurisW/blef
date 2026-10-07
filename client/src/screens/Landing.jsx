@@ -126,7 +126,7 @@ export default function Landing({ onEnter }) {
         {/* logo */}
         <div className="text-center mb-3">
           <div className="text-4xl font-extrabold gold-text tracking-tight drop-shadow-lg">BLEF</div>
-          <div className="text-[11px] uppercase tracking-[0.35em] text-slate-400 mt-0.5">karciana gra towarzyska</div>
+          <div className="text-[0.6875rem] uppercase tracking-[0.35em] text-slate-400 mt-0.5">karciana gra towarzyska</div>
         </div>
 
         <form onSubmit={submit} className="space-y-3">
@@ -189,7 +189,7 @@ export default function Landing({ onEnter }) {
               className="hidden"
               onChange={pickAvatarFile}
             />
-            {avatarErr && <div className="text-[11px] text-red-400 mt-1">{avatarErr}</div>}
+            {avatarErr && <div className="text-[0.6875rem] text-red-400 mt-1">{avatarErr}</div>}
           </div>
 
           {/* tryb */}

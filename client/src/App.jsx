@@ -3,6 +3,7 @@ import Landing from './screens/Landing.jsx'
 import Lobby from './screens/Lobby.jsx'
 import Game from './screens/Game.jsx'
 import { applyTheme, getStoredTheme } from './lib/themes.js'
+import { applyOptions } from './lib/options.js'
 import { socket } from './lib/socket.js'
 
 export default function App() {
@@ -11,9 +12,10 @@ export default function App() {
   const [toast, setToast] = useState('')
   const toastTimer = useRef(null)
 
-  // restore the chosen table theme on every load
+  // restore the chosen table theme + personal options on every load
   useEffect(() => {
     applyTheme(getStoredTheme())
+    applyOptions()
   }, [])
 
   // server-side errors (settings rejected, room gone, ...)

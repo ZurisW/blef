@@ -26,7 +26,7 @@ export default function History({ items, onClose }) {
   return (
     <div className="slide-in absolute right-3 top-3 bottom-3 w-56 sm:w-60 flex flex-col rounded-xl bg-slate-950/70 border border-white/10 backdrop-blur z-20">
       <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
-        <span className="text-[11px] uppercase tracking-widest text-amber-200/70">Historia</span>
+        <span className="text-[0.6875rem] uppercase tracking-widest text-amber-200/70">Historia</span>
         <button
           type="button"
           onClick={onClose}

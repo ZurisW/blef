@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { RANKS, isLegal } from '../lib/game'
+import { uiScale } from '../lib/ui'
 
 // Bid grid: rows = count, columns = rank (2..A)
 // With two decks a toggle switches the range: 2×-6× / 7×-12×
@@ -12,11 +13,13 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
   const rows = []
   for (let c = start; c <= end; c++) rows.push(c)
 
-  // fixed container height = 6 rows max (header + 6 rows + gaps)
-  const rowH = 24 // h-6
-  const gap = 4 // gap-1
-  const headerH = 16 // rank header row
-  const containerH = headerH + 6 * rowH + 5 * gap + 8 // +8 padding
+  // fixed container height = 6 rows max (header + 6 rows + gaps),
+  // in root pixels so it tracks the UI scale on big screens (h-6 = 1.5rem etc.)
+  const s = uiScale()
+  const rowH = 24 * s // h-6
+  const gap = 4 * s // gap-1
+  const headerH = 16 * s // rank header row
+  const containerH = Math.round(headerH + 6 * rowH + 5 * gap + 8 * s) // +8 padding
 
   // auto page switch: show the range where legal raises live
   useEffect(() => {
@@ -33,9 +36,9 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
   }, [currentBid, twoPages, maxCount, page])
 
   return (
-    <div className={`w-full max-w-[460px] lg:max-w-[640px] rounded-xl bg-slate-900/70 border border-white/10 p-1.5 lg:p-2 backdrop-blur transition-opacity ${disabled ? 'opacity-60' : ''}`}>
+    <div className={`w-full max-w-[28.75rem] lg:max-w-[40rem] rounded-xl bg-slate-900/70 border border-white/10 p-1.5 lg:p-2 backdrop-blur transition-opacity ${disabled ? 'opacity-60' : ''}`}>
       <div className="flex items-center justify-between gap-3 mb-1 pl-1">
-        <span className="text-[9px] lg:text-[11px] uppercase tracking-widest text-amber-200/70">
+        <span className="text-[0.5625rem] lg:text-[0.6875rem] uppercase tracking-widest text-amber-200/70">
           Ile sztuk &#8594; / jaka figura &#8595;
         </span>
         {twoPages && (
@@ -43,7 +46,7 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
             <button
               type="button"
               onClick={() => setPage(0)}
-              className={`text-[9px] lg:text-[11px] font-bold px-1.5 lg:px-2.5 py-0.5 lg:py-1 rounded border transition-colors ${
+              className={`text-[0.5625rem] lg:text-[0.6875rem] font-bold px-1.5 lg:px-2.5 py-0.5 lg:py-1 rounded border transition-colors ${
                 page === 0 ? 'bg-amber-400 border-amber-300 text-slate-900' : 'bg-slate-800 border-white/10 text-slate-400 hover:text-white'
               }`}
             >
@@ -52,7 +55,7 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
             <button
               type="button"
               onClick={() => setPage(1)}
-              className={`text-[9px] lg:text-[11px] font-bold px-1.5 lg:px-2.5 py-0.5 lg:py-1 rounded border transition-colors ${
+              className={`text-[0.5625rem] lg:text-[0.6875rem] font-bold px-1.5 lg:px-2.5 py-0.5 lg:py-1 rounded border transition-colors ${
                 page === 1 ? 'bg-amber-400 border-amber-300 text-slate-900' : 'bg-slate-800 border-white/10 text-slate-400 hover:text-white'
               }`}
             >
@@ -70,7 +73,7 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
           {/* header: ranks */}
           <div />
           {RANKS.map((v) => (
-            <div key={v} className="text-center text-[9px] lg:text-xs font-bold text-amber-200/80 pb-0.5">
+            <div key={v} className="text-center text-[0.5625rem] lg:text-xs font-bold text-amber-200/80 pb-0.5">
               {v}
             </div>
           ))}
@@ -96,7 +99,7 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
 function RowCells({ count, currentBid, selected, onSelect, disabled, maxCount }) {
   return (
     <>
-      <div className="flex items-center justify-center text-[10px] lg:text-xs font-bold text-amber-300/90 pr-1">
+      <div className="flex items-center justify-center text-[0.625rem] lg:text-xs font-bold text-amber-300/90 pr-1">
         {count}&#215;
       </div>
       {RANKS.map((value) => {
@@ -105,7 +108,7 @@ function RowCells({ count, currentBid, selected, onSelect, disabled, maxCount })
         const isSelected = selected && selected.count === count && selected.value === value
 
         let cls =
-          'h-6 rounded border text-[10px] lg:text-xs font-semibold transition-all duration-100 flex items-center justify-center '
+          'h-6 rounded border text-[0.625rem] lg:text-xs font-semibold transition-all duration-100 flex items-center justify-center '
         if (!legal || disabled) {
           cls += 'bg-white/5 border-white/10 text-white/20 cursor-not-allowed'
         } else if (isSelected) {

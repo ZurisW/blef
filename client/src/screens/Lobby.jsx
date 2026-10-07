@@ -5,6 +5,7 @@ import Avatar from '../components/Avatar'
 import { FACE_STYLES, getFaceId, setFaceStyle } from '../lib/faces.js'
 import { ICON_SETS, getFrontSetId, setFrontSet } from '../lib/icons.js'
 import { THEMES, resolveTheme, getStoredTheme, saveTheme, applyTheme } from '../lib/themes.js'
+import { loadOptions, saveOptions } from '../lib/options.js'
 import { BOTS } from '../lib/bots.js'
 import { socket, emitAck } from '../lib/socket.js'
 import { fileToDataUrl } from '../lib/image.js'
@@ -18,7 +19,7 @@ function SectionHeader({ label, hint, open, onToggle }) {
       type="button"
       onClick={onToggle}
       title={open ? 'Zwiń sekcję' : 'Rozwiń sekcję'}
-      className="w-full flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-amber-200/80 mb-1.5 text-left group"
+      className="w-full flex items-center gap-1.5 text-[0.625rem] uppercase tracking-widest text-amber-200/80 mb-1.5 text-left group"
     >
       <ChevronDown
         size={13}
@@ -28,7 +29,7 @@ function SectionHeader({ label, hint, open, onToggle }) {
         {label}
         {hint && <span className="normal-case tracking-normal text-slate-500">{hint}</span>}
       </span>
-      <span className="ml-auto text-[9px] normal-case tracking-normal text-slate-500 group-hover:text-slate-300">
+      <span className="ml-auto text-[0.5625rem] normal-case tracking-normal text-slate-500 group-hover:text-slate-300">
         {open ? 'zwiń' : 'rozwiń'}
       </span>
     </button>
@@ -41,6 +42,25 @@ function loadSettings() {
   } catch {
     return {}
   }
+}
+
+// Simple on/off switch row (Opcje dostępności)
+function ToggleRow({ label, hint, checked, onChange }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className="w-full flex items-center gap-3 rounded-lg border border-white/10 bg-slate-800/70 px-3 py-2 text-left hover:border-white/25 transition-colors"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block text-[0.6875rem] font-semibold text-slate-100">{label}</span>
+        {hint && <span className="block text-[0.625rem] text-slate-500">{hint}</span>}
+      </span>
+      <span className={`relative shrink-0 w-9 h-5 rounded-full transition-colors ${checked ? 'bg-emerald-500' : 'bg-slate-600'}`}>
+        <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all shadow ${checked ? 'left-[1.125rem]' : 'left-0.5'}`} />
+      </span>
+    </button>
+  )
 }
 
 export default function Lobby({ profile, room, onStart, onLeave }) {
@@ -60,8 +80,11 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
   const [face, setFace] = useState(getFaceId)
   const [frontSet, setFrontSetState] = useState(() => getFrontSetId(getFaceId()))
   // collapsible settings sections - all start collapsed
-  const [open, setOpen] = useState({ back: false, style: false, theme: false, icons: false })
+  const [open, setOpen] = useState({ back: false, style: false, theme: false, icons: false, a11y: false })
   const toggleSection = (k) => setOpen((o) => ({ ...o, [k]: !o[k] }))
+  // personal accessibility options (persisted, applied immediately)
+  const [opts, setOpts] = useState(() => loadOptions())
+  const setOpt = (key, value) => setOpts(saveOptions({ ...opts, [key]: value }))
   // table theme (personal, like the card face style)
   const [theme, setTheme] = useState(() => getStoredTheme())
   const pickTheme = (id) => {
@@ -257,7 +280,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
         {/* table code - one compact row */}
         <div className="text-center mb-3">
           <div className="flex items-center justify-center gap-2.5">
-            <span className="text-[10px] uppercase tracking-[0.3em] text-slate-400">Poczekalnia</span>
+            <span className="text-[0.625rem] uppercase tracking-[0.3em] text-slate-400">Poczekalnia</span>
             <button
               type="button"
               onClick={copyCode}
@@ -278,7 +301,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
               {copiedLink ? <Check size={15} className="text-emerald-300" /> : <Link2 size={15} className="text-slate-400" />}
             </button>
           </div>
-          <div className="text-[11px] text-slate-400 mt-1">
+          <div className="text-[0.6875rem] text-slate-400 mt-1">
             Podaj znajomym ten kod, żeby dołączyli
             {room.password && <span className="text-sky-300"> &middot; hasło: <span className="font-semibold">{room.password}</span></span>}
           </div>
@@ -287,7 +310,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
         {/* decks - set by the host */}
         {(!online || isHost) && (
         <div className="mb-3">
-          <div className="text-[10px] uppercase tracking-widest text-amber-200/80 mb-1.5">Talie</div>
+          <div className="text-[0.625rem] uppercase tracking-widest text-amber-200/80 mb-1.5">Talie</div>
           <div className="flex gap-2">
             <button
               type="button"
@@ -314,7 +337,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
         {/* fixed seat grid - always the same number of rows, the page never scrolls */}
         <div className="mb-3">
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] uppercase tracking-widest text-amber-200/80">
+            <span className="text-[0.625rem] uppercase tracking-widest text-amber-200/80">
               Miejsca <span className="text-slate-400 normal-case tracking-normal">({players.length}/{seatCount})</span>
             </span>
             <button
@@ -322,7 +345,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
               onClick={addBot}
               disabled={players.length >= seatCount || (online && !isHost)}
               title={online && !isHost ? 'Boty dodaje gospodarz' : undefined}
-              className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-slate-800 border border-white/10 text-slate-300 hover:border-amber-300 hover:text-amber-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="px-2 py-1 rounded-lg text-[0.6875rem] font-semibold bg-slate-800 border border-white/10 text-slate-300 hover:border-amber-300 hover:text-amber-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               + Dodaj bota
             </button>
@@ -338,7 +361,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                 >
                   <Avatar value={p.avatar} className={`${half ? 'w-5 h-5 text-sm' : 'w-7 h-7 text-lg'} shrink-0`} />
                   <span
-                    className={`font-semibold truncate min-w-0 ${half ? 'text-[11px]' : 'text-sm'} ${
+                    className={`font-semibold truncate min-w-0 ${half ? 'text-[0.6875rem]' : 'text-sm'} ${
                       p.isYou ? 'text-amber-300' : 'text-slate-100'
                     }`}
                   >
@@ -371,7 +394,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                   >
                     {'\u{1F0B0}'}
                   </span>
-                  <span className={`${half ? 'text-[11px]' : 'text-sm'} text-slate-500`}>wolne miejsce</span>
+                  <span className={`${half ? 'text-[0.6875rem]' : 'text-sm'} text-slate-500`}>wolne miejsce</span>
                 </div>
               )
             )}
@@ -397,7 +420,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
           </button>
         </div>
         {online && (
-          <div className="text-center text-[10px] text-slate-500 mt-2">
+          <div className="text-center text-[0.625rem] text-slate-500 mt-2">
             Znajomi wchodzą kodem albo linkiem - wyślij im kod z góry
           </div>
         )}
@@ -442,7 +465,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                   onToggle={() => toggleSection('back')}
                 />
                 {open.back && (online && !isHost ? (
-                  <div className="text-[11px] text-slate-500">Gospodarz wybiera rewers dla całego stołu.</div>
+                  <div className="text-[0.6875rem] text-slate-500">Gospodarz wybiera rewers dla całego stołu.</div>
                 ) : (
                   <>
                     <div className="flex items-center gap-2 flex-wrap">
@@ -465,7 +488,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                       <button
                         type="button"
                         onClick={() => setBackKind('url')}
-                        className={`rounded-lg px-2 py-2 text-[10px] font-semibold border transition-colors ${
+                        className={`rounded-lg px-2 py-2 text-[0.625rem] font-semibold border transition-colors ${
                           backKind === 'url' ? 'border-amber-400 text-amber-300 bg-amber-500/10' : 'border-white/10 text-slate-400 hover:border-white/30'
                         }`}
                       >
@@ -475,7 +498,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                         type="button"
                         onClick={() => backFileRef.current && backFileRef.current.click()}
                         title="Wgraj własny rewers (JPG/PNG) - obrazek zostanie zmniejszony automatycznie"
-                        className={`rounded-lg px-2 py-2 text-[10px] font-semibold border transition-colors ${
+                        className={`rounded-lg px-2 py-2 text-[0.625rem] font-semibold border transition-colors ${
                           backKind === 'url' && backUrl.startsWith('data:') ? 'border-amber-400 text-amber-300 bg-amber-500/10' : 'border-white/10 text-slate-400 hover:border-white/30'
                         }`}
                       >
@@ -496,11 +519,11 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                             className="w-8 h-11 rounded border border-white/15 overflow-hidden shrink-0"
                             style={{ backgroundImage: `url("${backUrl}")`, backgroundSize: 'cover', backgroundPosition: 'center' }}
                           />
-                          <span className="text-[11px] text-slate-400">Wgrany obrazek (JPG/PNG)</span>
+                          <span className="text-[0.6875rem] text-slate-400">Wgrany obrazek (JPG/PNG)</span>
                           <button
                             type="button"
                             onClick={() => setBackUrl('')}
-                            className="ml-auto text-[11px] text-red-300 hover:text-red-200 underline"
+                            className="ml-auto text-[0.6875rem] text-red-300 hover:text-red-200 underline"
                           >
                             Usuń
                           </button>
@@ -513,7 +536,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                           className="mt-1.5 w-full rounded-lg bg-slate-800 border border-white/10 px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-400/60"
                         />
                       ))}
-                    {backErr && <div className="text-[11px] text-red-400 mt-1">{backErr}</div>}
+                    {backErr && <div className="text-[0.6875rem] text-red-400 mt-1">{backErr}</div>}
                   </>
                 ))}
               </div>
@@ -533,7 +556,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                         }`}
                       >
                         <PlayingCard card={{ value: 'Q', suit: '\u2665' }} size="sm" face={id} />
-                        <div className={`text-[8px] text-center mt-0.5 ${face === id ? 'text-amber-300' : 'text-slate-500'}`}>
+                        <div className={`text-[0.5rem] text-center mt-0.5 ${face === id ? 'text-amber-300' : 'text-slate-500'}`}>
                           {FACE_STYLES[id].label}
                         </div>
                       </button>
@@ -562,7 +585,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                             <i className="w-3 h-3 rounded-sm" style={{ background: THEMES[id].primary }} />
                             <i className="w-3 h-3 rounded-sm" style={{ background: THEMES[id].gold }} />
                           </span>
-                          <span className={`block text-[8px] text-center mt-0.5 ${theme.id === id ? 'text-amber-300' : 'text-slate-500'}`}>
+                          <span className={`block text-[0.5rem] text-center mt-0.5 ${theme.id === id ? 'text-amber-300' : 'text-slate-500'}`}>
                             {THEMES[id].label}
                           </span>
                         </button>
@@ -580,13 +603,13 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                           <i className="w-3 h-3 rounded-sm" style={{ background: theme.felt || '#1e7a5b' }} />
                           <i className="w-3 h-3 rounded-sm" style={{ background: theme.accent || '#f59e0b' }} />
                         </span>
-                        <span className={`block text-[8px] text-center mt-0.5 ${theme.id === 'custom' ? 'text-amber-300' : 'text-slate-500'}`}>
+                        <span className={`block text-[0.5rem] text-center mt-0.5 ${theme.id === 'custom' ? 'text-amber-300' : 'text-slate-500'}`}>
                           Własny
                         </span>
                       </button>
                     </div>
                     {theme.id === 'custom' && (
-                      <div className="flex gap-4 items-center text-[11px] text-slate-300">
+                      <div className="flex gap-4 items-center text-[0.6875rem] text-slate-300">
                         <label className="flex items-center gap-1.5 cursor-pointer">
                           <span>Stół</span>
                           <input
@@ -635,17 +658,68 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                           frontSet === id ? 'border-amber-400 bg-amber-500/10' : 'border-white/10 hover:border-white/30 bg-slate-800'
                         }`}
                       >
-                        <span className="flex items-center gap-1 text-[13px] leading-none">
+                        <span className="flex items-center gap-1 text-[0.8125rem] leading-none">
                           {ICON_SETS[id].suits.map((g) => (
                             <span key={g}>{g}</span>
                           ))}
                           <span className="opacity-60 ml-0.5">{ICON_SETS[id].joker}</span>
                         </span>
-                        <span className={`block text-[8px] mt-0.5 ${frontSet === id ? 'text-amber-300' : 'text-slate-500'}`}>
+                        <span className={`block text-[0.5rem] mt-0.5 ${frontSet === id ? 'text-amber-300' : 'text-slate-500'}`}>
                           {ICON_SETS[id].label}
                         </span>
                       </button>
                     ))}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <SectionHeader label="Opcje dostępności" hint="- tylko u Ciebie" open={open.a11y} onToggle={() => toggleSection('a11y')} />
+                {open.a11y && (
+                  <div className="space-y-1.5">
+                    <ToggleRow
+                      label="Popup z kartami ze stołu"
+                      hint="pokazuje karty odsłonięte po pełnym okrążeniu"
+                      checked={opts.reveal}
+                      onChange={(v) => setOpt('reveal', v)}
+                    />
+                    <ToggleRow
+                      label="Podświetlaj sprawdzane karty"
+                      hint="obwódka wokół figury z deklaracji przy sprawdzaniu"
+                      checked={opts.highlight}
+                      onChange={(v) => setOpt('highlight', v)}
+                    />
+                    <ToggleRow
+                      label="Ogranicz animacje"
+                      hint="karty wskakują od razu, bez migotania"
+                      checked={opts.reduceMotion}
+                      onChange={(v) => setOpt('reduceMotion', v)}
+                    />
+                    <div className="rounded-lg border border-white/10 bg-slate-800/70 px-3 py-2">
+                      <div className="text-[0.6875rem] font-semibold text-slate-100">Skala interfejsu</div>
+                      <div className="text-[0.625rem] text-slate-500 mb-1.5">Auto dopasowuje wielkość do ekranu</div>
+                      <div className="flex gap-1.5">
+                        {[
+                          ['auto', 'Auto'],
+                          ['16px', '100%'],
+                          ['20px', '125%'],
+                          ['24px', '150%'],
+                        ].map(([v, l]) => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => setOpt('uiScale', v)}
+                            className={`flex-1 py-1.5 rounded-lg text-[0.6875rem] font-semibold border transition-colors ${
+                              opts.uiScale === v
+                                ? 'bg-amber-400 border-amber-300 text-slate-900'
+                                : 'bg-slate-800 border-white/10 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            {l}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

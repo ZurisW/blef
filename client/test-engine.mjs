@@ -1,5 +1,5 @@
 // Tymczasowy test silnika gry (node test-engine.mjs)
-import { initGame, reducer, legalMoves, isLegal } from './src/lib/game.js'
+import { initGame, reducer, legalMoves, isLegal, chooseAiAction } from './src/lib/game.js'
 
 const profile = { nickname: 'Tester', avatar: '\u{1F98A}' }
 const room = { code: 'TEST' }
@@ -86,6 +86,77 @@ assert(isLegal({ count: 3, value: 'K' }, 3, 'A'), 'ta sama liczba wyższa figura
 assert(isLegal({ count: 3, value: 'K' }, 4, '2'), 'więcej sztuk = legalne')
 assert(!isLegal({ count: 4, value: '2' }, 3, 'A'), 'mniej sztuk = nielegalne')
 assert(!isLegal({ count: 6, value: 'A' }, 6, 'A'), '6xAs nie da się podbić')
+
+// 6) AI: gra tym co trzyma - bez niebotycznych kwot i ciągłego sprawdzania
+const mkCard = (value, suit = '\u2660', isJoker = false) => ({ id: `${value}${suit}${Math.random()}`, value, suit, isJoker })
+const mkState = (hand, bid) => ({
+  phase: 'bid',
+  players: [
+    { id: 'you', name: 'Ty', isYou: true, hand: [], cardsCount: 2, isEliminated: false },
+    { id: 'b1', name: 'Bot', hand, cardsCount: hand.length, isEliminated: false },
+  ],
+  decks: 1,
+  maxCount: 6,
+  deck: [],
+  tableCards: [],
+  tableBatches: [],
+  currentBid: bid,
+  turnIndex: 1,
+  consecutiveBids: 0,
+  round: 1,
+  history: [],
+  lastRoundLoserId: null,
+  checkResult: null,
+  room: {},
+})
+
+// dwa walety na ręce -> otwarcie tylko 2xJ albo 3xJ (3 = lekki blef +1)
+let openOk = true
+let saw2 = false
+let saw3 = false
+for (let i = 0; i < 60; i++) {
+  const a = chooseAiAction(mkState([mkCard('J', '\u2660'), mkCard('J', '\u2665')], null))
+  if (a.type !== 'BID' || a.value !== 'J' || (a.count !== 2 && a.count !== 3)) openOk = false
+  if (a.count === 2) saw2 = true
+  if (a.count === 3) saw3 = true
+}
+assert(openOk, 'bot z 2 waletami otwiera wyłącznie 2xJ albo 3xJ')
+assert(saw2 && saw3, `wypada i 2xJ, i 3xJ (2=${saw2}, 3=${saw3})`)
+
+// dwa jokery (dzikie) -> wysoka figura, małe pokrycie: 2xA / 3xA
+let jokerOk = true
+for (let i = 0; i < 40; i++) {
+  const a = chooseAiAction(mkState([mkCard('JOKER', '\u2605', true), mkCard('JOKER', '\u2605', true)], null))
+  if (a.type !== 'BID' || a.value !== 'A' || a.count < 2 || a.count > 3) jokerOk = false
+}
+assert(jokerOk, '2 jokery = otwarcie 2xA albo 3xA')
+
+// 10xA przy pustym stole i ręce bez asów -> bot prawie nigdy nie podbija dalej
+const sAbsurd = mkState([mkCard('2', '\u2660'), mkCard('3', '\u2665')], { count: 10, value: 'A', playerId: 'you', playerName: 'Ty' })
+sAbsurd.maxCount = 12
+sAbsurd.decks = 2
+let raises = 0
+let illegal = 0
+for (let i = 0; i < 50; i++) {
+  const a = chooseAiAction(sAbsurd)
+  if (a.type === 'BID') {
+    raises++
+    if (!isLegal(sAbsurd.currentBid, a.count, a.value, 12)) illegal++
+  }
+}
+assert(raises <= 8, `nie podbija 10xA bez kart (${raises}/50 podbić)`)
+assert(illegal === 0, 'podbienia AI są legalne (12x max)')
+
+// pewna deklaracja (3 damy na ręce przeciw 2xD) -> raczej podbija, nie sprawdza
+const sSure = mkState([mkCard('Q', '\u2665'), mkCard('Q', '\u2666'), mkCard('Q', '\u2663')], { count: 2, value: 'Q', playerId: 'you', playerName: 'Ty' })
+let checks = 0
+for (let i = 0; i < 50; i++) {
+  const a = chooseAiAction(sSure)
+  if (a.type === 'CHECK') checks++
+  else if (!isLegal(sSure.currentBid, a.count, a.value, 6)) illegal++
+}
+assert(checks <= 10, `pewnej deklaracji nie sprawdza bez przerwy (${checks}/50)`)
+assert(illegal === 0, 'podbienia AI są legalne (6x max)')
 
 console.log(fails === 0 ? '\nWSZYSTKIE TESTY OK' : `\n${fails} TESTÓW NIE PRZESZŁO`)
 process.exit(fails === 0 ? 0 : 1)

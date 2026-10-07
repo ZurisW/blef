@@ -7,6 +7,8 @@ import History from '../components/History'
 import CheckOverlay from '../components/CheckOverlay'
 import HelpModal from '../components/HelpModal'
 import { initGame, reducer, isLegal, legalMoves, chooseAiAction, activePlayers } from '../lib/game'
+import { loadOptions } from '../lib/options'
+import { uiScale } from '../lib/ui'
 import { socket, emitAck } from '../lib/socket'
 
 // Seat positions. Desktop: small table (<=4 opponents) - an arc over the table centre,
@@ -94,8 +96,12 @@ export default function Game({ profile, room, onExit }) {
   const [showHistory, setShowHistory] = useState(false)
   const [showPile, setShowPile] = useState(false)
   const [handOpen, setHandOpen] = useState(false) // phone: own hand expanded (otherwise only the tops show)
-  const [rowsFit, setRowsFit] = useState(3) // how many batch rows fit on the table (measured, no scrolling)
+  // how many batch rows fit on the table (measured, no scrolling) and whether the
+  // stage is roomy enough for the bigger (md) table cards
+  const [fit, setFit] = useState({ rows: 3, md: false })
+  const [reveal, setReveal] = useState(null) // transient popup: cards just revealed by a rotation
   const batchesRef = useRef(null)
+  const opts = useMemo(() => loadOptions(), [])
 
   useEffect(() => {
     if (!online) return
@@ -115,14 +121,25 @@ export default function Game({ profile, room, onExit }) {
     else localDispatch(action)
   }
 
-  // how many batch rows fit in the available space - no scrolling, no scrollbar
+  // how many batch rows fit in the available space - no scrolling, no scrollbar.
+  // Everything is measured in root pixels (uiScale) so cards growing with the
+  // screen on big monitors stay in sync; a roomy stage gets the bigger md cards.
   useEffect(() => {
     const el = batchesRef.current
     if (!el) return
     const calc = () => {
-      const rows = Math.floor((el.clientHeight + 6) / 64) // row = 56 px cards + 8 px gap (+6 slack for slight card rotation)
-      const cap = window.innerWidth < 640 ? 2 : 4 // phone: collapse into the pile sooner
-      setRowsFit(Math.max(1, Math.min(cap, rows)))
+      const s = uiScale()
+      const space = el.clientHeight + 6 * s // + slack for slight card rotation
+      const isNarrow = window.innerWidth < 640
+      const mdRow = (80 + 8) * s // md card h-20 + gap-2
+      const smRow = (56 + 8) * s // sm card h-14 + gap-2
+      const md = !isNarrow && space / mdRow >= 2 // md only when at least 2 rows fit
+      const rows = Math.floor(space / (md ? mdRow : smRow))
+      const cap = isNarrow ? 2 : 4 // phone: collapse into the pile sooner
+      setFit((prev) => {
+        const next = { rows: Math.max(0, Math.min(cap, rows)), md }
+        return prev.rows === next.rows && prev.md === next.md ? prev : next
+      })
     }
     calc()
     window.addEventListener('resize', calc)
@@ -131,6 +148,7 @@ export default function Game({ profile, room, onExit }) {
   const [vh, setVh] = useState(typeof window !== 'undefined' ? window.innerHeight : 800)
   const [vw, setVw] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200)
   const narrow = vw < 640 // phone: fan replaced by a compact card-count badge
+  const s = uiScale() // root-font-size multiplier for pixel math (see lib/ui.js)
 
   // track window size (short window = smaller hand cards)
   useEffect(() => {
@@ -186,16 +204,17 @@ export default function Game({ profile, room, onExit }) {
   // Table: when all batches fit we show rows (3 cards each).
   // When there are too many (around the 5th rotation) the whole table collapses into
   // one realistic pile; a click opens a popup with the exact cards.
-  const showPileOnly = state.tableBatches.length > rowsFit
+  const showPileOnly = state.tableBatches.length > fit.rows
   const hiddenCards = state.tableCards
 
-  // pile geometry (compact, independent of the card count)
+  // pile geometry (compact, independent of the card count) - in root pixels,
+  // the xs cards scale with the root font size like everything else
   const pcols = 6
   const prows = Math.max(1, Math.ceil(hiddenCards.length / pcols))
-  const pstepX = 11
-  const pstepY = prows > 1 ? Math.max(2, Math.min(9, Math.floor(12 / (prows - 1)))) : 0
-  const pileW = (pcols - 1) * pstepX + 32 + 8
-  const pileH = (prows - 1) * pstepY + 44 + 8
+  const pstepX = 11 * s
+  const pstepY = prows > 1 ? Math.max(2, Math.min(9, Math.floor(12 / (prows - 1)))) * s : 0
+  const pileW = (pcols - 1) * pstepX + (32 + 8) * s
+  const pileH = (prows - 1) * pstepY + (44 + 8) * s
 
   // ---- local demo AI: when it is someone else's turn, "think" then act ----
   // (online bots are driven by the server - this effect only runs in local mode)
@@ -214,6 +233,24 @@ export default function Game({ profile, room, onExit }) {
     }, 1300)
     return () => clearTimeout(timer)
   }, [state, online])
+
+  // ---- popup: cards revealed by a full rotation (Opcje dostępności > popup) ----
+  const lastBatchesRef = useRef(null)
+  useEffect(() => {
+    const n = state.tableBatches?.length || 0
+    const prev = lastBatchesRef.current
+    lastBatchesRef.current = n
+    // only a genuine +1 while playing - a reconnect snapshot can jump by many
+    if (prev === null || n !== prev + 1) return
+    const batch = state.tableBatches[n - 1]
+    if (batch?.type === 'rotation' && opts.reveal) setReveal({ id: n, cards: batch.cards })
+  }, [state.tableBatches, opts.reveal])
+
+  useEffect(() => {
+    if (!reveal) return
+    const t = setTimeout(() => setReveal(null), 3200)
+    return () => clearTimeout(t)
+  }, [reveal])
 
   const handleBid = () => {
     if (!selected || !isLegal(state.currentBid, selected.count, selected.value, state.maxCount)) return
@@ -236,6 +273,9 @@ export default function Game({ profile, room, onExit }) {
     youIdx >= 0 ? [...allPlayers.slice(youIdx + 1), ...allPlayers.slice(0, youIdx)] : allPlayers
   const seats = seatsClockwise(seatPositions(opponents.length, narrow))
   const mid = (you.hand.length - 1) / 2
+  // hand cards: md on the phone, lg when the hand is wide or the window is short,
+  // xl otherwise - slightly bigger cards lying in front of you
+  const handSize = narrow ? 'md' : you.hand.length > 4 ? 'lg' : vh < 760 * s ? 'lg' : 'xl'
 
   // online: wait for the first server snapshot before touching the table
   if (online && !remote) {
@@ -310,14 +350,36 @@ export default function Game({ profile, room, onExit }) {
 
       {/* ---------- Table stage ---------- */}
       <main className="relative flex-1 min-h-0 overflow-hidden">
+        {/* popup: cards just revealed onto the table (auto-hides, never blocks clicks).
+            Centred with inset-x-0 + items-center - no transform, because the pop-in
+            animation owns transform: scale and would undo translate-x. Over the table,
+            clear of the top opponent seats. */}
+        {reveal && (
+          <div
+            key={reveal.id}
+            className="absolute inset-x-0 top-[38%] z-20 pop-in flex flex-col items-center gap-1.5 pointer-events-none"
+          >
+            <div className="rounded-full bg-slate-950/85 border border-amber-400/40 px-3.5 py-1 text-[0.6875rem] uppercase tracking-widest text-amber-200 shadow-lg whitespace-nowrap">
+              Na stół trafia {reveal.cards.length === 3 ? '3 karty' : `${reveal.cards.length} kart`}
+            </div>
+            <div className="flex gap-1.5 drop-shadow-2xl">
+              {reveal.cards.map((c, i) => (
+                <span key={c.id} className="deal-in inline-block" style={{ animationDelay: `${i * 70}ms` }}>
+                  <PlayingCard card={c} size="md" />
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* deck (left edge) */}
         <div className="absolute left-[3%] sm:left-[4%] top-1/2 -translate-y-1/2 flex flex-col items-center gap-2 z-10">
-          <div className="relative w-14 sm:w-16 h-[118px]">
+          <div className="relative w-14 sm:w-16 h-[7.375rem]">
             <PlayingCard faceDown size="lg" back={back} className="absolute top-1.5 left-1.5" />
             <PlayingCard faceDown size="lg" back={back} className="absolute top-0.5 left-0.5" />
             <PlayingCard faceDown size="lg" back={back} />
           </div>
-          <div className="text-[11px] text-slate-300 bg-slate-950/70 rounded-full px-2 py-0.5 border border-white/10">
+          <div className="text-[0.6875rem] text-slate-300 bg-slate-950/70 rounded-full px-2 py-0.5 border border-white/10">
             {state.deck.length} kart
           </div>
         </div>
@@ -350,7 +412,7 @@ export default function Game({ profile, room, onExit }) {
                           // card bottoms meet just below the avatar centre (avatar "holds" the fan);
                           // rotation around that shared point spreads the tops wide, low twist
                           // smaller scale (1.05) and deeper anchor (+15px) = cards sit tighter behind avatar
-                          translate: '-50% calc(-100% + 15px)',
+                          translate: '-50% calc(-100% + 0.9375rem)',
                           transformOrigin: '50% 100%',
                           rotate: `${angle}deg`,
                           scale: '1.05',
@@ -358,14 +420,14 @@ export default function Game({ profile, room, onExit }) {
                           zIndex: k,
                         }}
                       >
-                        <PlayingCard faceDown size="sm" back={back} />
+                        <PlayingCard faceDown size="md" back={back} />
                       </span>
                     )
                   })}
 
                 {/* avatar */}
                 <div
-                  className={`relative z-10 rounded-full p-[3px] transition-all ${
+                  className={`relative z-10 rounded-full p-[0.1875rem] transition-all ${
                     p.isEliminated
                       ? 'bg-white/10 grayscale'
                       : isCurrent
@@ -373,11 +435,11 @@ export default function Game({ profile, room, onExit }) {
                         : 'bg-white/25'
                   }`}
                 >
-                  <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-slate-800 flex items-center justify-center text-lg sm:text-xl ${p.isEliminated ? 'opacity-40' : ''}`}>
-                    <Avatar value={p.avatar} className="w-full h-full text-lg sm:text-xl" />
+                  <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-slate-800 flex items-center justify-center text-lg sm:text-2xl ${p.isEliminated ? 'opacity-40' : ''}`}>
+                    <Avatar value={p.avatar} className="w-full h-full text-lg sm:text-2xl" />
                   </div>
                   {isCurrent && !p.isEliminated && (
-                    <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-[9px] font-bold bg-amber-400 text-slate-900 rounded-full px-1.5 py-px whitespace-nowrap">
+                    <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-[0.5625rem] font-bold bg-amber-400 text-slate-900 rounded-full px-1.5 py-px whitespace-nowrap">
                       TERAZ
                     </span>
                   )}
@@ -385,7 +447,7 @@ export default function Game({ profile, room, onExit }) {
 
                 {/* phone: card count badge on the avatar corner - the nick gets the full block width */}
                 {narrow && !p.isEliminated && (
-                  <span className="absolute -top-2 -right-3 z-20 text-[10px] font-bold text-slate-300 bg-slate-950/80 border border-white/15 rounded-full px-1.5 py-px leading-none shadow">
+                  <span className="absolute -top-2 -right-3 z-20 text-[0.625rem] font-bold text-slate-300 bg-slate-950/80 border border-white/15 rounded-full px-1.5 py-px leading-none shadow">
                     {'\u{1F0A0}'}&#215;{p.cardsCount}
                   </span>
                 )}
@@ -395,8 +457,8 @@ export default function Game({ profile, room, onExit }) {
                   so the full name always fits; eliminated = grey avatar + red nick, no chips.
                   The seat block ends at the nick - no extra row, so the bottom-corner seats
                   sit lower without clipping at the stage edge (the TERAZ badge shows the turn). */}
-              <div className={`flex items-center gap-1.5 mt-2 ${narrow ? 'max-w-[74px]' : 'max-w-[110px]'}`}>
-                <span className={`text-[11px] sm:text-xs font-semibold truncate min-w-0 ${p.isEliminated ? 'text-red-400/90' : 'text-white'}`}>
+              <div className={`flex items-center gap-1.5 mt-2 ${narrow ? 'max-w-[4.625rem]' : 'max-w-[6.875rem]'}`}>
+                <span className={`text-[0.6875rem] sm:text-xs font-semibold truncate min-w-0 ${p.isEliminated ? 'text-red-400/90' : 'text-white'}`}>
                   {p.name}
                 </span>
               </div>
@@ -413,7 +475,7 @@ export default function Game({ profile, room, onExit }) {
             }`}
           >
             {state.tableBatches.length === 0 ? (
-              <div className="border-2 border-dashed border-white/15 rounded-xl px-4 py-2 text-[10px] text-slate-300/70 text-center">
+              <div className="border-2 border-dashed border-white/15 rounded-xl px-4 py-2 text-[0.625rem] text-slate-300/70 text-center">
                 Tu pojawią się karty ze stołu
               </div>
             ) : showPileOnly ? (
@@ -448,11 +510,11 @@ export default function Game({ profile, room, onExit }) {
                       </span>
                     )
                   })}
-                  <span className="absolute -top-2 -right-3 z-50 text-[10px] font-bold bg-amber-400 text-slate-900 rounded-full px-1.5 py-0.5 shadow-md leading-none">
+                  <span className="absolute -top-2 -right-3 z-50 text-[0.625rem] font-bold bg-amber-400 text-slate-900 rounded-full px-1.5 py-0.5 shadow-md leading-none">
                     {hiddenCards.length}
                   </span>
                 </button>
-                <div className="text-[9px] text-slate-300/70">kliknij, żeby zobaczyć jakie są</div>
+                <div className="text-[0.5625rem] text-slate-300/70">kliknij, żeby zobaczyć jakie są</div>
               </>
             ) : (
               state.tableBatches.map((batch, bi) => (
@@ -466,7 +528,7 @@ export default function Game({ profile, room, onExit }) {
                       className="deal-in inline-block"
                       style={{ transform: `rotate(${((ci % 3) - 1) * 2}deg)`, animationDelay: `${ci * 60}ms` }}
                     >
-                      <PlayingCard card={c} size="sm" />
+                      <PlayingCard card={c} size={fit.md ? 'md' : 'sm'} />
                     </span>
                   ))}
                 </div>
@@ -483,13 +545,13 @@ export default function Game({ profile, room, onExit }) {
               if (narrow && !you.isEliminated) setHandOpen((o) => !o)
             }}
           >
-            <div className="text-[10px] uppercase tracking-widest text-amber-200/80 drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)] flex items-center gap-1">
+            <div className="text-[0.625rem] uppercase tracking-widest text-amber-200/80 drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)] flex items-center gap-1">
               Twoja ręka: {you.isEliminated ? 'koniec' : `${you.hand.length} kart`}
               {narrow && !you.isEliminated && <span>{handOpen ? '\u25B2' : '\u25BC'}</span>}
             </div>
             <div
               className={`flex justify-center px-2 ${
-                narrow ? `overflow-hidden transition-all duration-200 ${handOpen ? 'max-h-[150px] items-end' : 'max-h-8 items-start'}` : 'items-end'
+                narrow ? `overflow-hidden transition-all duration-200 ${handOpen ? 'max-h-[9.375rem] items-end' : 'max-h-8 items-start'}` : 'items-end'
               }`}
             >
               {you.isEliminated ? (
@@ -506,7 +568,7 @@ export default function Game({ profile, room, onExit }) {
                     >
                       <PlayingCard
                         card={c}
-                        size={narrow || you.hand.length > 4 || vh < 760 ? 'md' : 'lg'}
+                        size={handSize}
                         className="deal-in transition-transform duration-150 hover:-translate-y-2 hover:scale-105 hover:z-30 cursor-pointer shadow-xl"
                         style={{ animationDelay: `${i * 90}ms` }}
                       />
@@ -522,7 +584,9 @@ export default function Game({ profile, room, onExit }) {
       </main>
 
       {/* ---------- Footer: bid grid + controls (fixed height) ---------- */}
-      <footer className="relative z-20 shrink-0 border-t border-amber-500/25 bg-slate-950/80 backdrop-blur px-3 py-1.5 flex flex-col md:flex-row gap-1.5 md:gap-3">
+      <footer className="relative z-20 shrink-0 border-t border-amber-500/25 bg-slate-950/80 backdrop-blur px-3 py-1.5">
+        {/* capped + centred so the menu stays a coherent block on ultrawide screens */}
+        <div className="w-full mx-auto max-w-[90rem] flex flex-col md:flex-row gap-1.5 md:gap-3">
         {/* left column: the bid grid */}
         <div className="flex-1 min-w-0 flex flex-col items-center justify-center gap-1.5">
           <div className="w-full flex justify-center pb-1">
@@ -587,7 +651,7 @@ export default function Game({ profile, room, onExit }) {
                 <span className="text-2xl font-extrabold text-white leading-none">
                   {state.currentBid.count} <span className="text-amber-400">&times;</span> {state.currentBid.value}
                 </span>
-                <span className="text-[11px] text-amber-200/80">podbił {state.currentBid.playerName}</span>
+                <span className="text-[0.6875rem] text-amber-200/80">podbił {state.currentBid.playerName}</span>
               </>
             ) : (
               <span className="text-xs text-slate-300">
@@ -617,11 +681,12 @@ export default function Game({ profile, room, onExit }) {
           </div>
 
           {/* warning line - reserved height so the footer never jumps */}
-          <div className="h-4 text-[10px] text-amber-300 text-center leading-4">
+          <div className="h-4 text-[0.625rem] text-amber-300 text-center leading-4">
             {yourTurn && state.currentBid && moves.length === 0
               ? '\u26A0 Brak mocniejszych deklaracji - musisz sprawdzić'
               : ''}
           </div>
+        </div>
         </div>
       </footer>
 
@@ -647,7 +712,7 @@ export default function Game({ profile, room, onExit }) {
           >
             <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 shrink-0">
               <div>
-                <div className="text-[11px] uppercase tracking-widest text-amber-300/80">Karty na stole</div>
+                <div className="text-[0.6875rem] uppercase tracking-widest text-amber-300/80">Karty na stole</div>
                 <div className="text-lg font-bold text-white">
                   {hiddenCards.length} kart - wszystkie
                 </div>
@@ -668,7 +733,7 @@ export default function Game({ profile, room, onExit }) {
                     key={c.id}
                     card={c}
                     size="sm"
-                    highlight={c.isJoker || c.value === state.currentBid?.value}
+                    highlight={opts.highlight && (c.isJoker || c.value === state.currentBid?.value)}
                   />
                 ))}
               </div>

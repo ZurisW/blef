@@ -12,12 +12,51 @@
   --btn-accent-h: #d97706;
 }
 
+/* Bigger screens get a bigger root font size - everything sized in rem
+   (text, spacing, cards, avatars, the bid grid) grows together with it.
+   Pixel-based layout math multiplies its constants by uiScale() to match.
+   A fixed value from "Opcje dostępności > Skala interfejsu" overrides this. */
+@media (min-width: 1500px) {
+  html {
+    font-size: 17.5px;
+  }
+}
+@media (min-width: 1750px) {
+  html {
+    font-size: 18.5px;
+  }
+}
+@media (min-width: 1920px) {
+  html {
+    font-size: 20px; /* FullHD felt too small */
+  }
+}
+@media (min-width: 2560px) {
+  html {
+    font-size: 23px;
+  }
+}
+@media (min-width: 3300px) {
+  html {
+    font-size: 27px; /* ultrawide */
+  }
+}
+
 body {
   background-color: #0f172a;
   color: #f8fafc;
   font-family: 'Inter', system-ui, sans-serif;
   height: 100%;
   overflow: hidden; /* bez pasków przewijania całej strony */
+}
+
+/* Opcje dostępności > ogranicz animacje (also zeroes the staggered delays) */
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-delay: 0ms !important;
+  transition-duration: 0.01ms !important;
 }
 
 /* hidden scrollbar - content still scrolls without the ugly bar */

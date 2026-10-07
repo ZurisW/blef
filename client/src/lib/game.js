@@ -368,10 +368,25 @@ function pAtLeast(need, n, p) {
   return sum
 }
 
+// ---- AI temperament: stable per player id (the same bot always plays the same way) ----
+// bold  = how much they are willing to bluff when raising
+// sharp = how readily they get suspicious and call a check
+function temperament(id) {
+  const str = String(id || '')
+  let h = 2166136261
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  h = h >>> 0
+  return { bold: (h % 100) / 100, sharp: (Math.floor(h / 100) % 100) / 100 }
+}
+
 export function chooseAiAction(state) {
   const max = state.maxCount || MAX_COUNT
   const bid = state.currentBid
   const me = state.players[state.turnIndex]
+  const t = temperament(me.id)
 
   // cards of a rank I can see (jokers count for every rank)
   const knownFor = (value) =>
@@ -380,39 +395,54 @@ export function chooseAiAction(state) {
     me.hand.filter((c) => c.isJoker).length +
     state.tableCards.filter((c) => c.isJoker).length
 
+  // ---------- Opening: bid what I actually hold (jokers included) ----------
+  // two Jacks -> 2xJ (and a bit over half the time a small +1 bluff, so 3xJ)
   if (!bid) {
-    const moves = legalMoves(null, max)
-    if (Math.random() < 0.8) {
-      // open low and honestly - prefer count=2 with rank I have most
-      const best = [...moves].sort((a, b) => a.count - b.count || knownFor(b.value) - knownFor(a.value))[0]
-      return { type: 'BID', ...best }
-    }
-    return { type: 'BID', ...moves[Math.floor(Math.random() * moves.length)] }
+    const value = [...RANKS].sort((a, b) => knownFor(b) - knownFor(a) || rankIdx(b) - rankIdx(a))[0]
+    let count = Math.max(2, Math.min(knownFor(value), max))
+    if (count < max && count <= 4 && Math.random() < 0.2 + 0.35 * t.bold) count += 1
+    return { type: 'BID', count, value }
   }
 
   const moves = legalMoves(bid, max)
   if (moves.length === 0) return { type: 'CHECK' }
 
-  // check more often the less likely the claim looks
+  // score every legal raise by how far it would go beyond what I can back up
+  const scored = moves.map((m) => {
+    const known = knownFor(m.value)
+    return { ...m, known, gap: m.count - known } // gap <= 0 = fully true, > 0 = bluffing
+  })
+  const maxGap = 1 + Math.round(t.bold * 2) // cautious bots stick to truth+1, bold ones to +3
+  const comfortable = scored.filter((m) => m.gap <= maxGap)
+
+  // ---------- Check or raise? ----------
+  // they only really pounce when the claim looks thin - no non-stop checking
   const pTrue = claimTrueChance(state, bid)
-  // strong penalty for high counts - don't blindly push to max
-  const highCountPenalty = bid && bid.count >= max * 0.6 ? 0.35 : bid && bid.count >= max * 0.4 ? 0.15 : 0
-  const checkProb = Math.min(0.95, (pTrue >= 0.75 ? 0.05 : pTrue >= 0.5 ? 0.15 : pTrue >= 0.3 ? 0.4 : 0.85) + highCountPenalty)
+  let checkProb = pTrue >= 0.8 ? 0.05 : pTrue >= 0.6 ? 0.12 : pTrue >= 0.4 ? 0.3 : pTrue >= 0.25 ? 0.5 : 0.7
+  checkProb *= 0.7 + 0.6 * t.sharp
+  if (comfortable.length === 0) {
+    // nothing reasonable to raise with: usually check, and ALWAYS vs a huge bid
+    checkProb = Math.max(checkProb, bid.count >= max * 0.6 ? 0.95 : 0.7)
+  }
+  checkProb = Math.min(0.9, Math.max(0.04, checkProb))
   if (Math.random() < checkProb) return { type: 'CHECK' }
 
-  // raise: prefer moves I can back up, and at high levels prefer SMALLER raises
-  if (Math.random() < 0.8) {
-    const best = [...moves].sort(
-      (a, b) => {
-        const needA = Math.max(0, a.count - knownFor(a.value))
-        const needB = Math.max(0, b.count - knownFor(b.value))
-        if (needA !== needB) return needA - needB
-        // at high bids, prefer smaller raise (more conservative)
-        if (bid && bid.count >= max * 0.5) return a.count - b.count
-        return b.count - a.count
-      }
-    )[0]
-    return { type: 'BID', ...best }
-  }
-  return { type: 'BID', ...moves[Math.floor(Math.random() * moves.length)] }
+  // ---------- Pick the raise ----------
+  const pool = comfortable.length ? comfortable : scored
+  pool.sort((a, b) => {
+    const ga = Math.max(0, a.gap)
+    const gb = Math.max(0, b.gap)
+    if (ga !== gb) return ga - gb
+    if (ga === 0) {
+      // fully truthful: the bigger claim first (pressure), then the higher rank
+      if (a.count !== b.count) return b.count - a.count
+      return rankIdx(b.value) - rankIdx(a.value)
+    }
+    // bluff: the smallest lie first (and the minimal legal raise)
+    if (a.count !== b.count) return a.count - b.count
+    return rankIdx(b.value) - rankIdx(a.value)
+  })
+  // a bit of variety so two bots never feel like one script
+  const pick = Math.random() < 0.25 ? pool[Math.floor(Math.random() * Math.min(3, pool.length))] : pool[0]
+  return { type: 'BID', count: pick.count, value: pick.value }
 }

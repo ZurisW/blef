@@ -89,4 +89,13 @@ server/
 - Responsive layout: on phones the card fan is replaced with a count badge, the own
   hand collapses to the card tops (tap to expand) and the table collapses into a
   clickable pile sooner
+- Scales with the screen: the root font size grows on large/ultrawide monitors
+  (rem-based cards, avatars and the bid grid scale together), pixel math follows via
+  `uiScale()`, and the table automatically switches to bigger cards when there is room
+- Accessibility options (per player, stored locally): popup showing the cards revealed
+  after a full rotation, highlight ring around the checked rank, reduced motion and a
+  manual interface scale (Auto / 100% / 125% / 150%)
+- Natural bots: they bid figures they actually hold (jokers count as wild, a small +1
+  bluff now and then), check when a claim looks thin instead of constantly, and never
+  push absurd counts without a reason — each bot has a stable temperament
 - The host fills empty seats with bots (server-driven AI); every human joins by code/link

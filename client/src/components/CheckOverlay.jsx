@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import canvasConfetti from 'canvas-confetti'
 import PlayingCard from './PlayingCard'
 import Avatar from './Avatar'
+import { loadOptions } from '../lib/options'
 
 // Check animation stages:
 // 0 -> "SPRAWDZAM!" banner, 1 -> revealed hands + the table cards (cards view only, everything
@@ -97,6 +98,9 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
   const existing = r.tableCards.slice(0, finalStart)
   const fin = r.tableCards.slice(finalStart)
   const narrow = typeof window !== 'undefined' && window.innerWidth < 640
+  // amber ring around the declared rank + jokers (can be switched off in Opcje dostępności)
+  const opts = loadOptions()
+  const hl = (c) => opts.highlight && (c.isJoker || c.value === r.bid.value)
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex p-4 overflow-y-auto">
@@ -116,7 +120,7 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
         {/* stage 1+: everyone lays their cards down first - these get a long look before the verdict */}
         {stage >= 1 && (
           <div className="px-5 py-3 space-y-2 flip-reveal">
-            <div className="text-[11px] uppercase tracking-widest text-slate-400">Karty graczy</div>
+            <div className="text-[0.6875rem] uppercase tracking-widest text-slate-400">Karty graczy</div>
             <div className="flex flex-wrap gap-x-4 gap-y-2">
               {r.hands.map((h) => (
                 <div key={h.id} className="flex flex-col items-center gap-1">
@@ -131,7 +135,7 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
                         card={c}
                         size={narrow ? 'sm' : 'md'}
                         className="flip-reveal"
-                        highlight={c.isJoker || c.value === r.bid.value}
+                        highlight={hl(c)}
                       />
                     ))}
                   </div>
@@ -146,10 +150,10 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
             and flip over one by one */}
         {stage >= 1 && (
           <div className="px-5 py-3 flip-reveal">
-            <div className="text-[11px] uppercase tracking-widest text-slate-400 mb-1.5">Karty na stole</div>
-            <div className="flex flex-wrap gap-2 min-h-[86px] items-start">
+            <div className="text-[0.6875rem] uppercase tracking-widest text-slate-400 mb-1.5">Karty na stole</div>
+            <div className="flex flex-wrap gap-2 min-h-[5.375rem] items-start">
               {existing.map((c) => (
-                <PlayingCard key={c.id} card={c} size="md" highlight={c.isJoker || c.value === r.bid.value} />
+                <PlayingCard key={c.id} card={c} size="md" highlight={hl(c)} />
               ))}
               {fin.map((c, i) => (
                 <span key={c.id} className="deal-in" style={{ animationDelay: `${i * 70}ms` }}>
@@ -158,7 +162,7 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
                       card={c}
                       size="md"
                       className="flip-quick"
-                      highlight={c.isJoker || c.value === r.bid.value}
+                      highlight={hl(c)}
                     />
                   ) : (
                     <PlayingCard faceDown size="md" back={state.room?.cardBack || null} />
@@ -177,9 +181,9 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
           <div className="shrink-0 border-t border-white/10 bg-slate-900/95 px-5 py-3 space-y-2.5">
             <div className={`rounded-xl border p-3 sm:p-4 text-center flip-reveal ${bidOk ? 'border-emerald-400/50 bg-emerald-500/10' : 'border-red-400/50 bg-red-500/10'}`}>
               {/* two columns close together, with labels and numbers on the same rows */}
-              <div className="grid grid-cols-[1fr_auto_1fr] gap-x-2 sm:gap-x-5 max-w-[420px] mx-auto items-center text-center">
+              <div className="grid grid-cols-[1fr_auto_1fr] gap-x-2 sm:gap-x-5 max-w-[26.25rem] mx-auto items-center text-center">
                 <div>
-                  <div className="h-5 flex items-center justify-center text-[11px] uppercase tracking-widest text-slate-400">
+                  <div className="h-5 flex items-center justify-center text-[0.6875rem] uppercase tracking-widest text-slate-400">
                     Znaleziono w puli
                   </div>
                   <div className="text-4xl sm:text-5xl font-extrabold text-white leading-none my-1">{r.found}</div>
@@ -191,7 +195,7 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
                 </div>
                 <div className="text-3xl text-slate-500 self-center">vs</div>
                 <div>
-                  <div className="h-5 flex items-center justify-center text-[11px] uppercase tracking-widest text-slate-400">
+                  <div className="h-5 flex items-center justify-center text-[0.6875rem] uppercase tracking-widest text-slate-400">
                     Zadeklarowano
                   </div>
                   <div className="text-4xl sm:text-5xl font-extrabold text-amber-300 leading-none my-1">{r.bid.count}</div>
