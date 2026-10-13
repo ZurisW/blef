@@ -1,11 +1,20 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Settings } from 'lucide-react'
 import PlayingCard from './PlayingCard.jsx'
 import OptionsSection from './OptionsSection.jsx'
+import ScaleSection from './ScaleSection.jsx'
 import { FACE_STYLES, getFaceId, setFaceStyle } from '../lib/faces.js'
 import { ICON_SETS, getFrontSetId, setFrontSet } from '../lib/icons.js'
 import { THEMES, resolveTheme, getStoredTheme, saveTheme, applyTheme } from '../lib/themes.js'
 import { fileToDataUrl } from '../lib/image.js'
+import {
+  readDeckFromFolder,
+  readDeckFromZip,
+  listDeckNames,
+  saveDeck,
+  removeDeck,
+  missingLabel,
+} from '../lib/decks.js'
 
 const BACK_PRESETS = ['gold', 'crimson', 'teal', 'casino', 'vegas', 'lucky', 'noir', 'royal', 'ice']
 
@@ -41,7 +50,7 @@ function SectionHeader({ label, hint, open, onToggle }) {
 // The one settings popup shared by the main menu and the lobby:
 // tab "Karty i stół" (backs, fronts, table, icons) + tab "Dostępność" (accessibility).
 // Everything is personal and persisted to localStorage.
-export default function SettingsModal({ onClose, onBackChange, backLocked = false }) {
+export default function SettingsModal({ onClose, onBackChange, backLocked = false, onDeckChange = null, deckLocked = false }) {
   const saved = loadLobby()
   const [backKind, setBackKind] = useState(() => saved.backKind || 'preset')
   const [backPreset, setBackPreset] = useState(() => saved.backPreset || 'gold')
@@ -53,20 +62,38 @@ export default function SettingsModal({ onClose, onBackChange, backLocked = fals
   const [open, setOpen] = useState({ back: false, style: false, theme: false, icons: false })
   const [tab, setTab] = useState('general') // general | a11y
   const backFileRef = useRef(null)
+  // ---- własna talia (upload folderu / ZIP-a) ----
+  const [deckName, setDeckName] = useState(() => saved.deckName || '')
+  const [deckList, setDeckList] = useState([])
+  const [deckMsg, setDeckMsg] = useState('')
+  const [deckErr, setDeckErr] = useState('')
+  const [pending, setPending] = useState(null) // {name, res: {deck, missing}} - czeka na zatwierdzenie
+  const folderInputRef = useRef(null)
+  const zipInputRef = useRef(null)
+
+  useEffect(() => {
+    listDeckNames().then(setDeckList)
+  }, [])
 
   const toggleSection = (k) => setOpen((o) => ({ ...o, [k]: !o[k] }))
 
-  // persist the card back (keep the decks key owned by the lobby) + notify the lobby
+  // persist the card back (keep the decks key owned by the lobby) + notify open screens
   const commitBack = (kind, preset, url) => {
     setBackKind(kind)
     setBackPreset(preset)
     setBackUrl(url)
+    const b = { kind, preset, url }
     try {
       localStorage.setItem('blef.lobby', JSON.stringify({ ...loadLobby(), backKind: kind, backPreset: preset, backUrl: url }))
     } catch {
       /* np. za duży dataURL - pomijamy */
     }
-    onBackChange?.({ kind, preset, url })
+    onBackChange?.(b)
+    try {
+      window.dispatchEvent(new CustomEvent('blef:back', { detail: b }))
+    } catch {
+      /* non-browser env */
+    }
   }
 
   const pickBackFile = async (e) => {
@@ -86,6 +113,82 @@ export default function SettingsModal({ onClose, onBackChange, backLocked = fals
     setFace(id)
     setFaceStyle(id)
     setFrontSetState(getFrontSetId(id))
+  }
+
+  // ---- własna talia (upload folderu / ZIP-a z obrazkami kart) ----
+  const commitDeck = (name) => {
+    setDeckName(name)
+    try {
+      localStorage.setItem('blef.lobby', JSON.stringify({ ...loadLobby(), deckName: name }))
+    } catch {
+      /* np. tryb prywatny - pomijamy */
+    }
+    onDeckChange?.(name)
+    try {
+      window.dispatchEvent(new CustomEvent('blef:deck', { detail: name }))
+    } catch {
+      /* non-browser env */
+    }
+  }
+
+  const stageFiles = async (read, fileOrList, nameGuess) => {
+    setDeckErr('')
+    setDeckMsg('')
+    try {
+      const res = await read(fileOrList, nameGuess)
+      setPending({ name: nameGuess, res })
+    } catch (err) {
+      setPending(null)
+      setDeckErr(err.message || 'Nie udało się wczytać plików')
+    }
+  }
+
+  const onFolderPick = (e) => {
+    const files = e.target.files
+    e.target.value = ''
+    if (!files || !files.length) return
+    const guess = String((files[0] && files[0].webkitRelativePath) || files[0].name || 'Talia').split('/')[0] || 'Talia'
+    stageFiles(readDeckFromFolder, files, guess)
+  }
+
+  const onZipPick = (e) => {
+    const file = e.target.files && e.target.files[0]
+    e.target.value = ''
+    if (!file) return
+    stageFiles(readDeckFromZip, file, file.name.replace(/\.zip$/i, '').slice(0, 40) || 'Talia')
+  }
+
+  const savePending = async () => {
+    if (!pending) return
+    const name = String(pending.name || pending.res.deck.name || 'Talia').slice(0, 40)
+    try {
+      await saveDeck({ ...pending.res.deck, name })
+    } catch (err) {
+      setDeckErr('Nie udało się zapisać talii: ' + (err.message || err))
+      return
+    }
+    setDeckList(await listDeckNames())
+    const miss = pending.res.missing
+    setDeckMsg(
+      `Wgrałem ${Object.keys(pending.res.deck.faces).length} kart` +
+        (miss.length ? ` - brakuje: ${missingLabel(miss)} (te użyją standardowego stylu)` : '') +
+        '.'
+    )
+    setPending(null)
+    commitDeck(name)
+  }
+
+  const deleteDeck = async () => {
+    if (!deckName) return
+    const gone = deckName
+    try {
+      await removeDeck(gone)
+      setDeckList(await listDeckNames())
+      setDeckMsg(`Usunięto talię "${gone}".`)
+      commitDeck('')
+    } catch (err) {
+      setDeckErr('Nie udało się usunąć talii: ' + (err.message || err))
+    }
   }
 
   const pickTheme = (id) => {
@@ -223,24 +326,108 @@ export default function SettingsModal({ onClose, onBackChange, backLocked = fals
             <div>
               <SectionHeader label="Styl przodu" open={open.style} onToggle={() => toggleSection('style')} />
               {open.style && (
-                <div className="flex gap-2 flex-wrap">
-                  {Object.keys(FACE_STYLES).map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => pickFace(id)}
-                      title={FACE_STYLES[id].label}
-                      className={`rounded-lg p-1 border transition-all ${
-                        face === id ? 'border-amber-400 scale-105' : 'border-white/10 hover:border-white/30'
-                      }`}
-                    >
-                      <PlayingCard card={{ value: 'Q', suit: '\u2665' }} size="sm" face={id} />
-                      <div className={`text-[0.5rem] text-center mt-0.5 ${face === id ? 'text-amber-300' : 'text-slate-500'}`}>
-                        {FACE_STYLES[id].label}
+                <>
+                  <div className="flex gap-2 flex-wrap">
+                    {Object.keys(FACE_STYLES).map((id) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => pickFace(id)}
+                        title={FACE_STYLES[id].label}
+                        className={`rounded-lg p-1 border transition-all ${
+                          face === id ? 'border-amber-400 scale-105' : 'border-white/10 hover:border-white/30'
+                        }`}
+                      >
+                        <PlayingCard card={{ value: 'Q', suit: '\u2665' }} size="sm" face={id} />
+                        <div className={`text-[0.5rem] text-center mt-0.5 ${face === id ? 'text-amber-300' : 'text-slate-500'}`}>
+                          {FACE_STYLES[id].label}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  {/* ---- własna talia: cały folder albo ZIP z obrazkami kart ---- */}
+                  <div className="mt-2 pt-2 border-t border-white/10 space-y-1.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[0.625rem] uppercase tracking-widest text-slate-500">Talia obrazków</span>
+                      {deckLocked ? (
+                        <span className="text-[0.6875rem] text-slate-500">gospodarz wybiera talię dla całego stołu</span>
+                      ) : (
+                        <>
+                          <select
+                            value={deckName}
+                            onChange={(e) => commitDeck(e.target.value)}
+                            className="rounded-lg bg-slate-800 border border-white/10 px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-amber-400/60"
+                          >
+                            <option value="">Standardowa</option>
+                            {deckList.map((n) => (
+                              <option key={n} value={n}>
+                                {n}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => folderInputRef.current && folderInputRef.current.click()}
+                            title="Wgraj cały folder z obrazkami kart (nazwy typu QS.svg, 10H.png)"
+                            className="rounded-lg px-2 py-1.5 text-[0.625rem] font-semibold border border-white/10 text-slate-300 hover:border-white/30"
+                          >
+                            {'\u{1F4C1}'} Folder
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => zipInputRef.current && zipInputRef.current.click()}
+                            title="Wgraj plik ZIP z obrazkami kart"
+                            className="rounded-lg px-2 py-1.5 text-[0.625rem] font-semibold border border-white/10 text-slate-300 hover:border-white/30"
+                          >
+                            {'\u{1F4E6}'} ZIP
+                          </button>
+                          {deckName && (
+                            <button type="button" onClick={deleteDeck} className="text-[0.6875rem] text-red-300 hover:text-red-200 underline">
+                              Usuń talię
+                            </button>
+                          )}
+                          <input ref={folderInputRef} type="file" multiple className="hidden" onChange={onFolderPick} {...{ webkitdirectory: '', directory: '' }} />
+                          <input
+                            ref={zipInputRef}
+                            type="file"
+                            accept=".zip,application/zip,application/x-zip-compressed"
+                            className="hidden"
+                            onChange={onZipPick}
+                          />
+                        </>
+                      )}
+                    </div>
+                    <div className="text-[0.5625rem] text-slate-500">
+                      Nazwy plików to karty: QS.svg, 10H.png, AS.svg, joker.svg - brakujące karty użyją standardowego stylu.
+                    </div>
+                    {pending && (
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={pending.name}
+                          onChange={(e) => setPending({ ...pending, name: e.target.value })}
+                          placeholder="nazwa talii"
+                          className="flex-1 min-w-0 rounded-lg bg-slate-800 border border-white/10 px-2 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-400/60"
+                        />
+                        <button
+                          type="button"
+                          onClick={savePending}
+                          className="rounded-lg px-2.5 py-1.5 text-[0.625rem] font-bold bg-amber-500 text-slate-900 hover:bg-amber-400"
+                        >
+                          Dodaj
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPending(null)}
+                          className="rounded-lg px-2 py-1.5 text-[0.625rem] border border-white/10 text-slate-400 hover:border-white/30"
+                        >
+                          Anuluj
+                        </button>
                       </div>
-                    </button>
-                  ))}
-                </div>
+                    )}
+                    {deckMsg && <div className="text-[0.625rem] text-emerald-300/90">{deckMsg}</div>}
+                    {deckErr && <div className="text-[0.625rem] text-red-400">{deckErr}</div>}
+                  </div>
+                </>
               )}
             </div>
 
@@ -353,7 +540,10 @@ export default function SettingsModal({ onClose, onBackChange, backLocked = fals
             </div>
           </div>
         ) : (
-          <OptionsSection />
+          <>
+            <OptionsSection />
+            <ScaleSection />
+          </>
         )}
       </div>
     </div>

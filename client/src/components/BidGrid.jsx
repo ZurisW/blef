@@ -24,6 +24,12 @@ export default function BidGrid({ currentBid, selected, onSelect, disabled, maxC
   const rowCount = twoPages ? 6 : rows.length
   const containerH = Math.round(headerH + rowCount * rowH + (rowCount - 1) * gap + 8 * s) // +8 padding
 
+  // a fresh round (nothing bid yet) starts on the 2x-6x page again - keeping
+  // the 7x-12x page from the previous round was confusing
+  useEffect(() => {
+    if (!currentBid) setPage(0)
+  }, [currentBid])
+
   // auto page switch: show the range where legal raises live
   useEffect(() => {
     if (!twoPages) return

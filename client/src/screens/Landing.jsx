@@ -4,7 +4,8 @@ import Avatar from '../components/Avatar.jsx'
 import HelpModal from '../components/HelpModal.jsx'
 import SettingsModal from '../components/SettingsModal.jsx'
 import { fileToDataUrl } from '../lib/image.js'
-import { emitAck, isConnected } from '../lib/socket.js'
+import { emitAck, isConnected, socket } from '../lib/socket.js'
+import { loadSeat, loadToken, saveSeat, saveToken } from '../lib/seat.js'
 
 export const AVATARS = [
   '\u{1F98A}', '\u{1F43B}', '\u{1F438}', '\u{1F412}', '\u{1F981}', '\u{1F42F}',
@@ -60,13 +61,90 @@ export default function Landing({ onEnter }) {
   const [showHelp, setShowHelp] = useState(false)
   const [showOpts, setShowOpts] = useState(false)
 
-  // shared link: /?room=CODE opens the form ready to join that table
+  // the last table we joined: prefilled code + password (nick and avatar are
+  // remembered the same way above)
+  const lastJoin = (() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('blef.lastJoin') || '{}')
+      return { code: typeof raw.code === 'string' ? raw.code : '', password: typeof raw.password === 'string' ? raw.password : '' }
+    } catch {
+      return { code: '', password: '' }
+    }
+  })()
+
+  // shared link: /?room=CODE - when the remembered details (code + password,
+  // nick, avatar) are still good, jump straight into the table; otherwise the
+  // join form opens prefilled and one click finishes the job.
   useEffect(() => {
     const c = new URLSearchParams(window.location.search).get('room')
-    if (c) {
-      setCode(c.toUpperCase())
-      setMode('join')
+    if (!c) {
+      // stay on the "Stwórz stół" tab by default - just prefill the join form
+      // with the last table so a rejoin is one click away
+      if (lastJoin.code) {
+        setCode(lastJoin.code)
+        setPassword(lastJoin.password)
+      }
+      return
     }
+    const codeU = c.toUpperCase()
+    // the link is consumed ONCE - strip it from the address bar, otherwise
+    // leaving the table (back to the menu) or a reload would re-join by itself
+    try {
+      window.history.replaceState(null, '', window.location.pathname)
+    } catch {
+      /* ignore */
+    }
+    setCode(codeU)
+    setMode('join')
+    // tabs that already have a seat are handled by the App-level token rejoin;
+    // this fallback is for a fresh browser: remembered code + password
+    if (loadSeat() || !nickname.trim()) return
+    const pass = lastJoin.code === codeU ? lastJoin.password : ''
+    if (pass) setPassword(pass)
+    let done = false
+    const go = async () => {
+      if (done) return
+      done = true
+      const name = nickname.trim().slice(0, 14)
+      const res = await emitAck('table:join', { code: codeU, name, avatar, password: pass, token: loadToken(codeU) })
+      if (res.ok) {
+        saveToken(res.room.code, res.token)
+        saveSeat({ code: res.room.code, name, avatar, password: pass, token: res.token })
+        try {
+          localStorage.setItem('blef.lastJoin', JSON.stringify({ code: codeU, password: pass }))
+        } catch {
+          /* ignoruj */
+        }
+        onEnter({
+          nickname: name,
+          avatar,
+          online: true,
+          youId: res.youId,
+          players: res.room.players,
+          room: { ...res.room, password: pass },
+        })
+      } else {
+        // stale details (table closed, password changed) - the prefilled form
+        // stays with the reason shown
+        setError(res.err || 'Nie udało się dołączyć')
+      }
+    }
+    if (isConnected()) go()
+    else {
+      socket.once('connect', go)
+      const t = setTimeout(() => {
+        socket.off('connect', go)
+        done = true // no connection - the plain prefilled form remains
+      }, 5000)
+      return () => {
+        socket.off('connect', go)
+        clearTimeout(t)
+      }
+    }
+    return () => {
+      socket.off('connect', go)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const chooseAvatar = (a) => {
@@ -114,15 +192,36 @@ export default function Landing({ onEnter }) {
     saveNickname(name)
 
     if (isConnected()) {
+      const joinCode = code.trim().toUpperCase()
       const res =
         mode === 'create'
           ? await emitAck('table:create', { name, avatar, password })
-          : await emitAck('table:join', { code: code.trim().toUpperCase(), name, avatar, password })
+          : // the stored token says "this seat is mine" - it also works mid-game
+            await emitAck('table:join', { code: joinCode, name, avatar, password, token: loadToken(joinCode) })
       if (!res.ok) {
         setError(res.err || 'Nie udało się połączyć ze stołem')
         return
       }
-      onEnter({ nickname: name, avatar, online: true, youId: res.youId, room: { ...res.room, password } })
+      // remember who we are at this table: reload / a dropped connection
+      // can bring us back automatically, even in the middle of a game
+      saveToken(res.room.code, res.token)
+      saveSeat({ code: res.room.code, name, avatar, password, token: res.token })
+      // and prefill the join form next time (code + password)
+      if (mode === 'join') {
+        try {
+          localStorage.setItem('blef.lastJoin', JSON.stringify({ code: joinCode, password }))
+        } catch {
+          /* ignoruj */
+        }
+      }
+      onEnter({
+        nickname: name,
+        avatar,
+        online: true,
+        youId: res.youId,
+        players: res.room.players,
+        room: { ...res.room, password },
+      })
       return
     }
 

@@ -51,6 +51,21 @@ cd client && npm run build   # outputs to dist/ (server's static root)
 cd server && npm start       # serves the built client + the socket API on :3001
 ```
 
+> **Updating a live server (important):** `dist/` is gitignored, so `git pull`
+> alone changes NOTHING on the site - it only updates the source. After every
+> pull you must rebuild the client and restart the server:
+>
+> ```bash
+> git pull
+> npm --prefix client ci     # devDependencies are needed for the Vite build
+> npm run build              # creates a fresh dist/
+> # restart the node process (pm2/systemd/service or just node server/index.js)
+> ```
+>
+> Then hard-refresh the browser (Ctrl+F5) so it drops the cached `index.html`.
+> The build is served both from `/` and from `/blef/` (the Socket.io path is
+> `/blef/socket.io`), so it works behind a reverse-proxy subpath as well.
+
 Engine tests:
 
 ```bash
@@ -60,8 +75,15 @@ cd client && node test-engine.mjs
 Docker (builds the client and packages it with the server in one image):
 
 ```bash
-docker compose up -d --build    # http://localhost:3001
+git pull
+docker compose up -d             # http://localhost:3001
 ```
+
+> **Docker updates:** `docker-compose.yml` sets `pull_policy: build`, so a plain
+> `docker compose up -d` **rebuilds the image every time** - after `git pull` the
+> new code is picked up automatically (requires Docker Compose v2.22+; check with
+> `docker compose version`). On older Compose versions the setting is rejected,
+> use `docker compose up -d --build` instead.
 
 ## Structure
 
@@ -82,7 +104,16 @@ server/
   10 seats / 2 decks)
 - Emoji avatar + nickname (max 14 characters)
 - Customizable card backs (presets or your own image), card face styles, icon sets and
-  table themes — all stored locally per player
+  table themes — all personal: stored locally per player, everyone renders the table
+  their own way, and any of it can be switched **live mid-game** from the gear menu
+- Uploaded card decks: pick a whole folder (or a ZIP) of card images named like
+  QS.svg / 10H.png / AS.svg / joker.svg in settings — purely a personal view (no
+  server upload), missing cards fall back to the standard fronts
+- Turn alert (opt-in): a soft chime when the turn comes to you while the window is in
+  the background, plus a flashing favicon + tab title so the taskbar shows it too
+- Quick rejoin: the main menu lands on "Stwórz stół" with the last table's code and
+  password prefilled in the join tab, and a `?room=CODE` invite link joins the table
+  automatically (nick, avatar and seat remembered)
 - Staged check-reveal overlay: first the hands and the table cards fit on screen with no
   scrolling, then the counting and the verdict stage; the loser clicks "Następna runda"
   (10 s auto-advance otherwise)
@@ -99,3 +130,13 @@ server/
   bluff now and then), check when a claim looks thin instead of constantly, and never
   push absurd counts without a reason — each bot has a stable temperament
 - The host fills empty seats with bots (server-driven AI); every human joins by code/link
+  (only the deck count 1/2 is a host setting — it changes seats and the bid limit)
+- "Kupka" pile mode: batch the table rows while they fit and keep a readable pile
+  (tap a card to pop it up), or spread the cards left to right showing their corners
+- Rejoin that always syncs: a reload or reconnect drops you back into your seat (stored
+  seat token), the same nickname + table code takes the seat back from any device
+  (password tables still demand the password), reconnects have no attempt cap, and
+  whoever leaves mid-game has the AI play their seat until they return — the others
+  just keep playing
+- Leaving a table always releases the seat server-side, and a waiting table left with
+  only bots is cleaned up; a finished game lingers 90 s so everyone can read the result

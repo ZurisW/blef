@@ -1,5 +1,6 @@
 import { FACE_STYLES, getFaceId, getFaceStyle } from '../lib/faces.js'
 import { getFrontSetId, getFrontSet, isEmojiGlyph, suitGlyph } from '../lib/icons.js'
+import { useDeck, cardKey } from '../lib/decks.js'
 
 const SIZES = {
   xs: { box: 'w-8 h-11 rounded', corner: 'text-[0.5rem]', suitSm: 'text-[0.4375rem]', emoji: 'text-[0.4375rem]', big: 'text-sm', bigEmoji: 'text-xs' },
@@ -11,6 +12,10 @@ const SIZES = {
 }
 
 const RED_SUITS = ['\u2665', '\u2666'] // ♥ ♦
+
+// scale slider from Settings > Options (80-200%) - zoom grows the card AND its
+// layout box, so neighbours in a hand/fan keep their spacing
+const CARD_ZOOM = { zoom: 'var(--card-scale, 1)' }
 
 // ---------- Emoji tinted to the face style colours ----------
 // Emoji carry their own colours, which would clash with the style palette - so
@@ -220,8 +225,23 @@ function Corner({ value, glyph, color, s, className }) {
   )
 }
 
+// Wgrana własna talia (folder/ZIP w ustawieniach) - obrazek wypełnia całą kartę
+function CustomFace({ src, s, posCls, className, style, highlight }) {
+  return (
+    <div
+      className={`${s.box} ${posCls} overflow-hidden shadow-lg shadow-black/40 select-none border border-black/30 ${
+        highlight ? 'ring-2 ring-amber-400 ring-offset-2 ring-offset-slate-900 shadow-amber-500/40' : ''
+      } ${className}`}
+      style={{ background: '#0f172a', ...style, ...CARD_ZOOM }}
+    >
+      <img src={src} alt="" draggable={false} className="absolute inset-0 w-full h-full object-cover pointer-events-none" />
+    </div>
+  )
+}
+
 export default function PlayingCard({ card, size = 'md', faceDown = false, highlight = false, back = null, face = null, className = '', style }) {
   const s = SIZES[size] || SIZES.md
+  const deck = useDeck() // własna talia stołu (null = standardowe przody)
   // if the caller positions the card (e.g. absolute), do not add relative
   const posCls = className.includes('absolute') ? '' : 'relative'
 
@@ -238,8 +258,15 @@ export default function PlayingCard({ card, size = 'md', faceDown = false, highl
         className={`${s.box} ${posCls} overflow-hidden shadow-lg shadow-black/40 ring-1 ring-black/30 select-none border ${customUrl ? 'border-amber-600/50' : preset.border} ${className}`}
         style={
           customUrl
-            ? { backgroundImage: `url("${customUrl}")`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#14243d', ...style }
-            : { backgroundColor: preset.backgroundColor, backgroundImage: preset.image, ...style }
+            ? {
+                backgroundImage: `url("${customUrl}")`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                backgroundColor: '#14243d',
+                ...style,
+                ...CARD_ZOOM,
+              }
+            : { backgroundColor: preset.backgroundColor, backgroundImage: preset.image, ...style, ...CARD_ZOOM }
         }
       >
         <div className={`absolute inset-[3px] rounded-[3px] border ${customUrl ? 'border-amber-500/40' : preset.inner}`} />
@@ -265,11 +292,13 @@ export default function PlayingCard({ card, size = 'md', faceDown = false, highl
 
   // ---------- Joker ----------
   if (card.isJoker) {
+    const jokerSrc = deck && deck.faces ? deck.faces.JOKER : null
+    if (jokerSrc) return <CustomFace src={jokerSrc} s={s} posCls={posCls} className={className} style={style} highlight={highlight} />
     const jpad = cornerPad(f.frame, size)
     return (
       <div
         className={`${s.box} ${posCls} overflow-hidden shadow-lg shadow-black/40 select-none border-2 ${highlight ? 'ring-2 ring-amber-400 ring-offset-2 ring-offset-slate-900 shadow-amber-500/40' : ''} ${className}`}
-        style={{ background: f.bg, borderColor: f.red, ...style }}
+        style={{ background: f.bg, borderColor: f.red, ...style, ...CARD_ZOOM }}
       >
         <CardFrame frame={f.frame} size={size} />
         {/* joker signature from the chosen icon set (on xs it is too tight - skipped) */}
@@ -316,11 +345,13 @@ export default function PlayingCard({ card, size = 'md', faceDown = false, highl
   const color = RED_SUITS.includes(card.suit) ? f.red : f.black
   const glyph = suitGlyph(set, card.suit)
   const pad = cornerPad(f.frame, size)
+  const customSrc = deck && deck.faces ? deck.faces[cardKey(card)] : null
+  if (customSrc) return <CustomFace src={customSrc} s={s} posCls={posCls} className={className} style={style} highlight={highlight} />
 
   return (
     <div
       className={`${s.box} ${posCls} overflow-hidden shadow-lg shadow-black/40 select-none border ${highlight ? 'ring-2 ring-amber-400 ring-offset-2 ring-offset-slate-900 shadow-amber-500/40' : ''} ${className}`}
-      style={{ background: f.bg, borderColor: f.edge, ...style }}
+      style={{ background: f.bg, borderColor: f.edge, ...style, ...CARD_ZOOM }}
     >
       <CardFrame frame={f.frame} size={size} />
       {/* emoji sets keep only the value - corner emoji overlapped the centre */}

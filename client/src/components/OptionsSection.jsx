@@ -1,13 +1,16 @@
 import { useState } from 'react'
 import { loadOptions, saveOptions } from '../lib/options'
 
-// Simple on/off switch row
-function ToggleRow({ label, hint, checked, onChange }) {
+// Simple on/off switch row (exported - the scale section reuses it)
+export function ToggleRow({ label, hint, checked, onChange, disabled = false }) {
   return (
     <button
       type="button"
-      onClick={() => onChange(!checked)}
-      className="w-full flex items-center gap-3 rounded-lg border border-white/10 bg-slate-800/70 px-3 py-2 text-left hover:border-white/25 transition-colors"
+      onClick={() => !disabled && onChange(!checked)}
+      disabled={disabled}
+      className={`w-full flex items-center gap-3 rounded-lg border border-white/10 bg-slate-800/70 px-3 py-2 text-left transition-colors ${
+        disabled ? 'opacity-45 cursor-not-allowed' : 'hover:border-white/25'
+      }`}
     >
       <span className="min-w-0 flex-1">
         <span className="block text-[0.6875rem] font-semibold text-slate-100">{label}</span>
@@ -34,16 +37,22 @@ export default function OptionsSection() {
         onChange={(v) => setOpt('reveal', v)}
       />
       <ToggleRow
-        label="Wyłącz kupkę"
-        hint="karty zostają na stole i mocno nachodzą na siebie - bez kupki"
-        checked={opts.noPile}
-        onChange={(v) => setOpt('noPile', v)}
+        label="Kupka"
+        hint="karty ze stołu układają się w kupkę - jak wyłączona, leżą rozłożone od lewa do prawa"
+        checked={opts.pile}
+        onChange={(v) => setOpt('pile', v)}
       />
       <ToggleRow
-        label="Czytelna kupka"
-        hint="większe karty i szerszy rozstaw - widać figury bez klikania"
-        checked={opts.readablePile}
-        onChange={(v) => setOpt('readablePile', v)}
+        label="Alarm ruchu"
+        hint="sygnał dźwiękowy przy Twoim ruchu + migająca pomarańczowa ikonka, gdy patrzysz w inną kartę"
+        checked={opts.turnAlert}
+        onChange={(v) => setOpt('turnAlert', v)}
+      />
+      <ToggleRow
+        label="Duża ikonka liczby kart"
+        hint="przy każdym graczu - od razu widać, ile kart trzyma"
+        checked={opts.bigCount}
+        onChange={(v) => setOpt('bigCount', v)}
       />
       <ToggleRow
         label="Pomniejszony footer"

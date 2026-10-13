@@ -10,6 +10,7 @@ import cors from 'cors'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
 import { existsSync } from 'fs'
+import { randomBytes } from 'crypto'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -50,7 +51,7 @@ const httpServer = createServer(app)
 const io = new Server(httpServer, {
   path: process.env.SOCKET_PATH || '/blef/socket.io',
   cors: { origin: '*', methods: ['GET', 'POST'] },
-  maxHttpBufferSize: 1e6,
+  maxHttpBufferSize: 1e6, // card decks are personal (client-side) - payloads stay small
 })
 
 // ---------- rooms ----------
@@ -80,10 +81,9 @@ function createRoom({ code, password, name, avatar, socketId }) {
     code,
     password: password || '',
     decks: 1,
-    cardBack: null,
     status: 'waiting', // waiting | game
     hostId: socketId,
-    players: [{ id: socketId, name, avatar, isBot: false, connected: true }],
+    players: [{ id: socketId, name, avatar, isBot: false, connected: true, token: randomBytes(16).toString('hex'), lastAlive: Date.now() }],
     game: null,
     aiTimer: null,
     roundTimer: null,
@@ -96,8 +96,10 @@ function createRoom({ code, password, name, avatar, socketId }) {
 function clearTimers(room) {
   clearTimeout(room.aiTimer)
   clearTimeout(room.roundTimer)
+  clearTimeout(room.destroyTimer)
   room.aiTimer = null
   room.roundTimer = null
+  room.destroyTimer = null
 }
 
 function destroyRoom(room) {
@@ -110,7 +112,6 @@ function publicTable(room) {
     code: room.code,
     hasPassword: !!room.password,
     decks: room.decks,
-    cardBack: room.cardBack,
     status: room.status,
     hostId: room.hostId,
     seatCount: seatCountFor(room),
@@ -128,6 +129,24 @@ function broadcastTable(room) {
   io.to(roomKey(room.code)).emit('table:update', publicTable(room))
 }
 
+// success answer for table:create / table:join - includes the seat token
+// (the client stores it so the same player can rejoin, even mid-game) and
+// everything needed to jump straight back into a running game.
+function tableAck(room, socket) {
+  const seat = room.players.find((p) => p.id === socket.id)
+  return {
+    ok: true,
+    youId: socket.id,
+    token: (seat && seat.token) || '',
+    room: {
+      code: room.code,
+      decks: room.decks,
+      status: room.status,
+      players: publicTable(room).players,
+    },
+  }
+}
+
 // ---------- game snapshots (per player, secrets stripped) ----------
 function snapshot(room, pid) {
   const g = room.game
@@ -139,6 +158,7 @@ function snapshot(room, pid) {
     // the engine only stores names for winners - derive ids for a per-player answer
     const winnerId = cr.found >= cr.bid.count ? cr.bid.playerId : cr.challengerId
     checkResult = {
+      endsAt: room.roundEndsAt || 0, // countdown deadline the client mirrors
       ...cr,
       loserIsYou: cr.loserId === pid,
       winnerIsYou: winnerId === pid,
@@ -150,7 +170,7 @@ function snapshot(room, pid) {
 
   return {
     ...g,
-    room: { code: room.code, decks: room.decks, cardBack: room.cardBack, hostId: room.hostId },
+    room: { code: room.code, decks: room.decks, hostId: room.hostId },
     deck: new Array(g.deck.length).fill(null), // length only - no values
     players: g.players.map((p) => ({
       id: p.id,
@@ -171,7 +191,10 @@ function broadcastGame(room) {
   for (const p of room.players) {
     if (p.isBot) continue
     const sock = io.sockets.sockets.get(p.id)
-    if (sock) sock.emit('game:snap', snapshot(room, p.id))
+    // only sockets still sitting at THIS table get the snapshot - a player who
+    // left (their seat id stays for the rejoin) must not feed stale state to
+    // whatever new game they are in now
+    if (sock && sock.rooms.has(roomKey(room.code))) sock.emit('game:snap', snapshot(room, p.id))
   }
 }
 
@@ -187,10 +210,12 @@ function finalize(room) {
 
 function afterAction(room) {
   finalize(room)
-  broadcastGame(room)
   const phase = room.game?.phase
+  // timers FIRST: the round deadline must exist before the snapshot goes out,
+  // otherwise clients mirror a stale deadline (the "auto za 0s" bug)
   if (phase === 'bid') scheduleBot(room)
   else if (phase === 'roundEnd') scheduleRoundEnd(room)
+  broadcastGame(room)
 }
 
 function scheduleBot(room) {
@@ -223,9 +248,11 @@ function scheduleRoundEnd(room) {
   clearTimeout(room.roundTimer)
   const g = room.game
   if (!g || g.phase !== 'roundEnd') return
-  // without a click everyone advances after 5 s; after the manual "Następna runda"
-  // click the new round starts after 3 s
-  const delay = room.goClicked ? 3000 : 5000
+  // without a click everyone advances after 10 s (the verdict screen shows
+  // 8 of them - the first 2 s are the card reveal); the loser's "Następna
+  // runda" click shrinks the wait to 2 s
+  const delay = room.goClicked ? 2000 : 10000
+  room.roundEndsAt = Date.now() + delay // countdown deadline for the clients
   logEvent(room, `schedule:${delay}`)
   room.roundTimer = setTimeout(() => advanceRound(room), delay)
 }
@@ -244,15 +271,17 @@ function advanceRound(room) {
 function applyAction(room, pid, action) {
   const g = room.game
   if (!g || !action || typeof action !== 'object') return false
+  const actor = room.players.find((x) => x.id === pid)
+  if (actor) actor.lastAlive = Date.now() // an action is the loudest proof of life
 
   if (action.type === 'NEXT_ROUND') {
-    // fast path: only the loser may trigger it, once, shrinking the wait to 3 s
+    // fast path: only the loser may trigger it, once, shrinking the wait to 2 s
     if (g.phase !== 'roundEnd' || pid !== g.lastRoundLoserId) return false
     if (!room.goClicked) {
       room.goClicked = true
       logEvent(room, 'fast-click')
-      clearTimeout(room.roundTimer)
-      room.roundTimer = setTimeout(() => advanceRound(room), 3000)
+      scheduleRoundEnd(room) // 2 s window, new deadline for everyone
+      io.to(roomKey(room.code)).emit('round:go', room.roundEndsAt)
     }
     return true
   }
@@ -286,22 +315,86 @@ const cleanName = (v) => (typeof v === 'string' ? v.trim().slice(0, 14) : '')
 const cleanAvatar = (v) => (typeof v === 'string' ? v.slice(0, 200000) : '')
 const cleanPassword = (v) => (typeof v === 'string' ? v.trim().slice(0, 40) : '')
 
-function normalizeBack(v) {
-  if (!v || typeof v !== 'object') return null
-  const kind = v.kind === 'url' ? 'url' : 'preset'
-  const value = typeof v.value === 'string' ? v.value.slice(0, 500000) : ''
-  if (!value) return null
-  return { kind, value }
+const roomOf = (socket) => (socket.data.code ? rooms.get(socket.data.code) : null)
+
+// Point every id reference in a running game at the reconnected socket, so a
+// returning player keeps their bids, their turn, their check result and the
+// "only the loser may advance" rule - everything keyed by seat id.
+function rebindGameIds(game, oldId, newId) {
+  if (!game) return
+  const gp = game.players.find((p) => p.id === oldId)
+  if (gp) {
+    gp.id = newId
+    gp.connected = true
+  }
+  if (game.currentBid && game.currentBid.playerId === oldId) game.currentBid.playerId = newId
+  if (game.lastRoundLoserId === oldId) game.lastRoundLoserId = newId
+  const cr = game.checkResult
+  if (cr) {
+    if (cr.loserId === oldId) cr.loserId = newId
+    if (cr.challengerId === oldId) cr.challengerId = newId
+    if (cr.gameWinnerId === oldId) cr.gameWinnerId = newId
+    const h = cr.hands.find((x) => x.id === oldId)
+    if (h) h.id = newId
+  }
 }
 
-const roomOf = (socket) => (socket.data.code ? rooms.get(socket.data.code) : null)
+// Hand the old seat back to the returning player (fresh socket id) and push
+// everyone a fresh snapshot so the rejoiner sees the current state at once.
+function reattachSeat(room, seat, socket) {
+  const oldId = seat.id
+  // a live older tab still holding the seat gets politely cut off (a dead
+  // socket from a reload is simply gone and lands here too)
+  const oldSock = io.sockets.sockets.get(oldId)
+  if (oldSock && oldSock.id !== socket.id) {
+    oldSock.data.code = null
+    oldSock.leave(roomKey(room.code))
+    oldSock.emit('err', 'Ten stół otworzyłeś w innej karcie')
+    oldSock.emit('kicked') // that tab returns to the menu instead of showing a frozen table
+  }
+  seat.id = socket.id
+  seat.connected = true
+  seat.lastAlive = Date.now()
+  socket.data.code = room.code
+  socket.join(roomKey(room.code))
+  if (room.hostId === oldId) room.hostId = socket.id
+  rebindGameIds(room.game, oldId, socket.id)
+  clearTimeout(room.aiTimer)
+  room.aiTimer = null
+  clearTimeout(room.destroyTimer) // the player is back - no cleanup
+  room.destroyTimer = null
+  logEvent(room, 'rejoin')
+  broadcastTable(room)
+  broadcastGame(room) // straight to the returning player too
+  scheduleBot(room) // only fires for bot/disconnected seats
+  scheduleRoundEnd(room) // a waiting roundEnd keeps its normal 8 s window
+}
+
+// The sweeper handed this seat to the AI (the tab was silent too long), but the
+// same socket just pinged back - the player is home again, take the seat back.
+function reviveSeat(room, p) {
+  p.connected = true
+  if (room.game) {
+    const gp = room.game.players.find((x) => x.id === p.id)
+    if (gp) gp.connected = true
+  }
+  clearTimeout(room.destroyTimer) // a human is back - no cleanup
+  room.destroyTimer = null
+  logEvent(room, 'alive-revive')
+  broadcastTable(room)
+  broadcastGame(room)
+  scheduleBot(room)
+  scheduleRoundEnd(room)
+}
 
 // ---------- socket handlers ----------
 io.on('connection', (socket) => {
   socket.on('table:create', (payload = {}, ack) => {
     const name = cleanName(payload.name)
     if (!name) return ack?.({ ok: false, err: 'Wpisz swój nick!' })
-    if (roomOf(socket)) return ack?.({ ok: false, err: 'Jesteś już przy innym stole' })
+    // a stale binding (e.g. an old lobby we never really left) must not block
+    // creating a fresh table - leaving first is exactly what the player means
+    if (roomOf(socket)) handleLeave(socket)
     const code = genCode()
     const room = createRoom({
       code,
@@ -312,7 +405,7 @@ io.on('connection', (socket) => {
     })
     socket.data.code = code
     socket.join(roomKey(code))
-    ack?.({ ok: true, youId: socket.id, room: { code, decks: room.decks, cardBack: room.cardBack } })
+    ack?.(tableAck(room, socket))
   })
 
   socket.on('table:join', (payload = {}, ack) => {
@@ -320,10 +413,33 @@ io.on('connection', (socket) => {
     const name = cleanName(payload.name)
     if (!name) return ack?.({ ok: false, err: 'Wpisz swój nick!' })
     if (!/^[A-Z0-9]{3,8}$/.test(code)) return ack?.({ ok: false, err: 'Nieprawidłowy kod stołu' })
-    if (roomOf(socket)) return ack?.({ ok: false, err: 'Jesteś już przy innym stole' })
 
     const room = rooms.get(code)
     if (!room) return ack?.({ ok: false, err: 'Nie ma takiego stołu' })
+
+    // heading to another table drops any stale binding (and its socket room)
+    // first, so one socket is ever in a single table room
+    const current = roomOf(socket)
+    if (current && current.code !== code) handleLeave(socket)
+
+    // --- returning player: the stored seat token gives the seat back, mid-game
+    // too (a reload or a dropped connection no longer locks anyone out). The
+    // same nickname works as well - e.g. cleared browser storage or another
+    // device - while a password-protected table still demands its password on
+    // that path (the token path is proof enough on its own).
+    const byName = (p) => !p.isBot && p.name.toLowerCase() === name.toLowerCase()
+    const tokenSeat = room.players.find((p) => byName(p) && p.token && p.token === payload.token)
+    const nameSeat =
+      !room.password || room.password === cleanPassword(payload.password)
+        ? room.players.find(byName)
+        : null
+    const seat = tokenSeat || nameSeat
+    if (seat) {
+      reattachSeat(room, seat, socket)
+      return ack?.(tableAck(room, socket))
+    }
+
+    if (current && current.code === code) return ack?.({ ok: false, err: 'Jesteś już przy tym stole' })
     if (room.status !== 'waiting') return ack?.({ ok: false, err: 'Gra już trwa' })
     if (room.password && room.password !== cleanPassword(payload.password)) {
       return ack?.({ ok: false, err: 'Złe hasło stołu' })
@@ -335,10 +451,18 @@ io.on('connection', (socket) => {
       return ack?.({ ok: false, err: 'Ten nick jest zajęty' })
     }
 
-    room.players.push({ id: socket.id, name, avatar: cleanAvatar(payload.avatar), isBot: false, connected: true })
+    room.players.push({
+      id: socket.id,
+      name,
+      avatar: cleanAvatar(payload.avatar),
+      isBot: false,
+      connected: true,
+      token: randomBytes(16).toString('hex'),
+      lastAlive: Date.now(),
+    })
     socket.data.code = code
     socket.join(roomKey(code))
-    ack?.({ ok: true, youId: socket.id, room: { code, decks: room.decks, cardBack: room.cardBack } })
+    ack?.(tableAck(room, socket))
     broadcastTable(room)
   })
 
@@ -346,6 +470,17 @@ io.on('connection', (socket) => {
     const room = roomOf(socket)
     if (!room) return ack?.({ ok: false, err: 'Nie jesteś przy stole' })
     ack?.({ ok: true, table: publicTable(room) })
+  })
+
+  // proof of life from a tab that is still open - keeps the seat away from the
+  // AI (silence > 45 s hands it over), and a ping after that takes it back
+  socket.on('seat:alive', () => {
+    const room = roomOf(socket)
+    if (!room) return
+    const p = room.players.find((x) => x.id === socket.id)
+    if (!p || p.isBot) return
+    p.lastAlive = Date.now()
+    if (p.connected === false) reviveSeat(room, p)
   })
 
   socket.on('table:leave', () => {
@@ -360,16 +495,15 @@ io.on('connection', (socket) => {
     const room = roomOf(socket)
     if (!room) return fail('Nie jesteś przy stole')
     if (room.hostId !== socket.id) return fail('Ustawienia zmienia gospodarz')
-    if (room.status !== 'waiting') return fail('Gra już trwa')
 
     if (payload.decks === 1 || payload.decks === 2) {
+      if (room.status !== 'waiting') return fail('Liczby talii nie zmienisz w trakcie gry')
       if (payload.decks === 1 && room.players.length > 5) {
         return fail('Najpierw usuń graczy - na 1 talii jest 5 miejsc')
       }
       room.decks = payload.decks
+      broadcastTable(room)
     }
-    if (payload.cardBack !== undefined) room.cardBack = normalizeBack(payload.cardBack)
-    broadcastTable(room)
     ack?.({ ok: true })
   })
 
@@ -412,7 +546,7 @@ io.on('connection', (socket) => {
     }))
     room.game = initGame(
       null,
-      { code: room.code, decks: room.decks, cardBack: room.cardBack },
+      { code: room.code, decks: room.decks },
       roster
     )
     broadcastTable(room) // Lobby switches to the game screen on this
@@ -438,6 +572,35 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => handleLeave(socket))
 })
 
+// A tab can look connected while its page is frozen (phone screen off, laptop
+// asleep) - the table would then wait forever for a player who is not home.
+// Clients ping every 12 s; a human silent for 45 s is handed over to the AI
+// and gets the "no connection" badge - and a ping later takes the seat back.
+setInterval(() => {
+  const now = Date.now()
+  for (const room of rooms.values()) {
+    if (room.status !== 'game') continue
+    for (const p of room.players) {
+      if (p.isBot || p.connected === false) continue
+      if (!p.lastAlive || now - p.lastAlive <= 45000) continue
+      p.connected = false
+      if (room.game) {
+        const gp = room.game.players.find((x) => x.id === p.id)
+        if (gp) gp.connected = false
+      }
+      if (room.hostId === p.id) {
+        const nextHuman = room.players.find((x) => !x.isBot && x.connected !== false)
+        if (nextHuman) room.hostId = nextHuman.id
+      }
+      logEvent(room, `stale-seat:${p.name}`)
+      broadcastTable(room)
+      broadcastGame(room)
+      scheduleBot(room)
+      scheduleRoundEnd(room)
+    }
+  }
+}, 10000)
+
 function handleLeave(socket) {
   const room = roomOf(socket)
   if (!room) return
@@ -450,7 +613,9 @@ function handleLeave(socket) {
 
   if (room.status === 'waiting') {
     room.players.splice(idx, 1)
-    if (room.players.length === 0) return destroyRoom(room)
+    // a waiting table without a single human is pointless (it would sit there
+    // full of bots forever) - drop it entirely
+    if (!room.players.some((p) => !p.isBot)) return destroyRoom(room)
     if (wasHost) {
       const nextHuman = room.players.find((p) => !p.isBot) || room.players[0]
       room.hostId = nextHuman.id
@@ -460,13 +625,20 @@ function handleLeave(socket) {
   }
 
   // mid-game: an explicit leave or a dropped connection both hand the seat
-  // over to the AI - but the last human leaving ends the whole table
+  // over to the AI - but the last human leaving gives everyone a moment:
+  // the table survives 90 s (reload, network blip) before it is cleaned up
   const p = room.players[idx]
   if (!p.isBot) {
     const otherHumans = room.players.filter((x) => !x.isBot && x.connected !== false && x.id !== p.id)
     if (otherHumans.length === 0) {
-      destroyRoom(room)
-      return
+      clearTimeout(room.destroyTimer)
+      // the victory/defeat screen deserves to stay up while the grace runs;
+      // clients reconnect and rejoin forever (no attempt cap), so a player
+      // who wanders off mid-result screen comes back into the same room
+      room.destroyTimer = setTimeout(() => {
+        if (!room.players.some((x) => !x.isBot && x.connected !== false)) destroyRoom(room)
+      }, 90000)
+      logEvent(room, 'last-human-left:90s-grace')
     }
   }
   p.connected = false

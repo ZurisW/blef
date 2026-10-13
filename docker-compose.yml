@@ -2,6 +2,9 @@ services:
   blef:
     build: .
     image: blef:latest
+    # rebuild the image on every `docker compose up -d` (needs Compose v2.22+),
+    # otherwise a plain `up -d` keeps running the old image after `git pull`
+    pull_policy: build
     container_name: blef
     ports:
       - "3001:3001"

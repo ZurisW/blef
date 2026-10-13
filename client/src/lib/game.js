@@ -195,7 +195,7 @@ export function reducer(state, action) {
           deck = []
           tableCards = [...tableCards, ...added]
           tableBatches = [...tableBatches, { type: 'rotation', cards: added }]
-          history = [...history, { type: 'table', text: `Talia prawie pusta: +${added.length} kart` }]
+          history = [...history, { type: 'table', text: `Talia prawie pusta: +${added.length} ${added.length === 1 ? 'karta' : 'karty'}` }]
         } else {
           history = [...history, { type: 'table', text: 'Talia pusta - okrążenie bez nowych kart' }]
         }
@@ -259,7 +259,11 @@ export function reducer(state, action) {
         isEliminated,
         cardsCount: Math.min(cardsCount, 7),
         tableCards,
-        hands: players.filter((p) => !p.isEliminated).map((p) => ({ id: p.id, name: p.name, avatar: p.avatar, isYou: p.isYou, hand: p.hand })),
+        // everyone still in the game PLUS the loser we are about to kick out -
+        // their cards must be on screen before the elimination verdict
+        hands: players
+          .filter((p) => !p.isEliminated || p.id === loser.id)
+          .map((p) => ({ id: p.id, name: p.name, avatar: p.avatar, isYou: p.isYou, hand: p.hand })),
       }
 
       let history = [...state.history, { type: 'check', text: `${challenger.name}: SPRAWDZAM! (${bid.count} \u00D7 ${bid.value})` }]

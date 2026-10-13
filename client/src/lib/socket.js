@@ -9,7 +9,8 @@ const URL = import.meta.env.DEV ? undefined : undefined
 export const socket = io(URL, { 
   path: '/blef/socket.io',
   reconnection: true, 
-  reconnectionAttempts: 20,
+  // no attempt cap: a phone that loses the network for a minute keeps
+  // retrying (and the auto-rejoin then pulls the seat back with fresh state)
   transports: ['polling', 'websocket'],
   withCredentials: false
 })

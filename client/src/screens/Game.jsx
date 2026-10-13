@@ -1,36 +1,41 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { LogOut, Layers, CircleHelp, History as HistoryIcon, X } from 'lucide-react'
+import { LogOut, Layers, CircleHelp, History as HistoryIcon, X, WifiOff, Settings as SettingsIcon } from 'lucide-react'
 import PlayingCard from '../components/PlayingCard'
 import Avatar from '../components/Avatar'
 import BidGrid from '../components/BidGrid'
 import History from '../components/History'
 import CheckOverlay from '../components/CheckOverlay'
 import HelpModal from '../components/HelpModal'
+import SettingsModal from '../components/SettingsModal'
 import { initGame, reducer, isLegal, legalMoves, chooseAiAction, activePlayers } from '../lib/game'
 import { loadOptions } from '../lib/options'
 import { uiScale } from '../lib/ui'
 import { socket, emitAck } from '../lib/socket'
+import { playTurnChime, setTurnFlash } from '../lib/notify'
+import { DeckContext, getDeck as getSavedDeck } from '../lib/decks'
 
-// Seat positions. Desktop: small table (<=4 opponents) - an arc over the table centre,
-// big table (2 decks) - two rows so nicks and avatars never overlap.
-// Phone (narrow): seat block is avatar+count badge and wider nick.
-// For 9 opponents (10 players): 4 across the top, 4 down the right side,
-// 1 at bottom-left. The user sits at bottom centre (not in this array).
+// Polska odmiana: 1 karta, 2-4 karty, 5+ kart (11-14 też kart)
+function kartForm(n) {
+  if (n === 1) return 'karta'
+  const d = n % 10
+  const h = n % 100
+  if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return 'karty'
+  return 'kart'
+}
+
+// Seat positions. Desktop: arc (small table) or two rows (big table).
+// Phone: avatar+count block, at most 4 seats per row.
 function seatPositions(n, narrow) {
   const arr = []
   if (n < 1) return arr
   if (narrow) {
     // 10-player special layout: 4 top, 4 right, 1 bottom-left
     if (n === 9) {
-      // top row: 4 seats evenly spaced
       for (let i = 0; i < 4; i++) arr.push({ left: (100 * (i + 0.5)) / 4, top: 15 })
-      // right column: 4 seats (top-right already placed, so 3 more down the side)
       for (let i = 0; i < 4; i++) arr.push({ left: 88, top: 33 + i * 12 })
-      // bottom-left: 1 seat
       arr.push({ left: 12, top: 80 })
       return arr
     }
-    // other counts: even rows of at most 4
     const counts = n <= 4 ? [n] : [Math.ceil(n / 2), n - Math.ceil(n / 2)]
     const tops = counts.length === 1 ? [17] : [15, 82] // bottom row sits a bit lower
     counts.forEach((cnt, ri) => {
@@ -54,9 +59,7 @@ function seatPositions(n, narrow) {
     const left = kTop === 1 ? 50 : 15 + (i * 70) / (kTop - 1)
     arr.push({ left, top: 21 + (4 * Math.abs(left - 50)) / 35 })
   }
-  // the rest go into the bottom corners - slightly rounded like the top row,
-  // clear of the batch rows, your hand and the deck (left edge)
-  // narrow window: bottom seats sit a bit closer to the centre (inX)
+  // the rest go into the bottom corners, clear of the rows, your hand and the deck
   const compact = typeof window !== 'undefined' && window.innerWidth < 820
   const inX = compact ? 20 : 21
   const arc = (left) => Math.min(90, 85 + (4 * Math.abs(left - 50)) / 43) // bottom corners sit a bit lower
@@ -70,13 +73,24 @@ function seatPositions(n, narrow) {
   return arr
 }
 
-// Re-sort seats to clockwise order starting from the bottom centre (my seat):
-// angle measured on screen (y down), reference = straight down = 90 deg.
+// Re-sort seats to clockwise order starting from my seat (bottom centre)
 function seatsClockwise(seats) {
   return seats
     .map((s, i) => ({ i, k: ((((Math.atan2(s.top - 50, s.left - 50) * 180) / Math.PI) - 90) % 360 + 360) % 360 }))
     .sort((a, b) => a.k - b.k)
     .map((x) => seats[x.i])
+}
+
+// the player's saved card back (localStorage) - personal: every player
+// picks their own backs for the whole table view
+function loadPersonalBack() {
+  try {
+    const s = JSON.parse(localStorage.getItem('blef.lobby') || '{}')
+    if (s.backKind === 'url' && (s.backUrl || '').trim()) return { kind: 'url', value: s.backUrl.trim() }
+    return { kind: 'preset', value: s.backPreset || 'gold' }
+  } catch {
+    return { kind: 'preset', value: 'gold' }
+  }
 }
 
 export default function Game({ profile, room, onExit }) {
@@ -91,30 +105,85 @@ export default function Game({ profile, room, onExit }) {
   }, [])
   const [local, localDispatch] = useReducer(reducer, boot)
   const [remote, setRemote] = useState(null)
+  // the player's own card faces and card back - personal customization,
+  // everyone at the table renders the game their own way
+  const [deck, setDeck] = useState(null)
+  const [back, setBack] = useState(loadPersonalBack)
+  // when the current check overlay must end (server deadline; 0 = local demo)
+  const [roundEndsAt, setRoundEndsAt] = useState(0)
   const [selected, setSelected] = useState(null)
   const [showHelp, setShowHelp] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+  const [showOpts, setShowOpts] = useState(false) // settings gear in the top bar
   const [showPile, setShowPile] = useState(false)
   const [handOpen, setHandOpen] = useState(false) // phone: own hand expanded (otherwise only the tops show)
-  // how many batch rows fit on the table (measured, no scrolling) and whether the
-  // stage is roomy enough for the bigger (md) table cards
+  // how many batch rows fit on the table (measured) and the biggest card size
+  // that still fits them
   const [fit, setFit] = useState({ rows: 3, size: 'md', rowH: 80, cover: 0.5, avail: 0 })
   const [reveal, setReveal] = useState(null) // transient popup: cards just revealed by a rotation
   const batchesRef = useRef(null)
-  const opts = useMemo(() => loadOptions(), [])
+  // options are live: the in-game settings popup saves them and the game
+  // re-reads them right away ('blef:options' event)
+  const [opts, setOpts] = useState(loadOptions)
+  useEffect(() => {
+    const onOpts = () => setOpts(loadOptions())
+    window.addEventListener('blef:options', onOpts)
+    return () => window.removeEventListener('blef:options', onOpts)
+  }, [])
   const cf = opts.compactFooter // shorter, stretched footer
 
   useEffect(() => {
     if (!online) return
-    const onSnap = (s) => setRemote(s)
+    const onSnap = (s) => {
+      // safety net: a snapshot from another table must never overwrite ours
+      if (s.room && s.room.code !== room.code) return
+      setRemote(s)
+      setRoundEndsAt(s && s.checkResult ? s.checkResult.endsAt || 0 : 0)
+    }
+    // the loser clicked "Następna runda" - the server shrinks the wait to 2 s
+    const onGo = (deadline) => setRoundEndsAt(deadline || 0)
     socket.on('game:snap', onSnap)
+    socket.on('round:go', onGo)
     emitAck('game:sync').then((res) => {
-      if (res.ok && res.state) setRemote(res.state)
+      if (res.ok && res.state) onSnap(res.state)
     })
-    return () => socket.off('game:snap', onSnap)
-  }, [online])
+    return () => {
+      socket.off('game:snap', onSnap)
+      socket.off('round:go', onGo)
+    }
+  }, [online, room.code])
+
+  // the player's own deck of card faces (IndexedDB) - personal: everyone
+  // renders the table with their own cards, the server is not involved
+  const loadDeck = () => {
+    try {
+      const name = JSON.parse(localStorage.getItem('blef.lobby') || '{}').deckName
+      getSavedDeck(name || '')
+        .then((d) => setDeck(d || null))
+        .catch(() => setDeck(null))
+    } catch {
+      setDeck(null)
+    }
+  }
+  useEffect(loadDeck, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    // the settings popup swapped the personal deck / card back mid-game
+    const onDeck = () => loadDeck()
+    const onBack = (e) => {
+      const b = e.detail || {}
+      setBack({ kind: b.kind, value: b.kind === 'url' ? b.url : b.preset })
+    }
+    window.addEventListener('blef:deck', onDeck)
+    window.addEventListener('blef:back', onBack)
+    return () => {
+      window.removeEventListener('blef:deck', onDeck)
+      window.removeEventListener('blef:back', onBack)
+    }
+  }, [])
 
   const state = online ? remote || boot : local
+  // who may change the table's deck / card back (same rule as the lobby)
+  const isHostGame = !online || state.room?.hostId === profile?.youId
 
   // one funnel for every player action - server-authoritative in online mode
   const send = (action) => {
@@ -122,20 +191,14 @@ export default function Game({ profile, room, onExit }) {
     else localDispatch(action)
   }
 
-  // Table rows: 4 rows of 3 cards on desktop, 3 rows on smaller screens, 2 rows
-  // on the phone - past that the table collapses into the pile. A new row covers
-  // the one above by half (up to 75% when the stage is tight) so the rank corners
-  // stay readable up to the last row. Cards take the biggest size that still
-  // fits the target rows: lg -> md -> sm. Measured in root pixels (uiScale).
+  // measure how many batch rows fit on the table and the biggest card size
+  // for them: lg -> md -> sm. Root pixels (uiScale).
   useEffect(() => {
     const el = batchesRef.current
     if (!el) return
     const calc = () => {
       const s = uiScale()
-      // exact container height: the fitted rows must NOT overflow (they used to
-      // clip the bottom row) - card rotation sticks out ~1px, tolerable.
-      // The final (+5) batch wears a ring with py-1 - reserve its 8px so it
-      // doesn't clip at the bottom either.
+      // the final (+5) batch wears a ring - reserve its 8px so it doesn't clip
       const batches = state.tableBatches
       const lastB = batches.length ? batches[batches.length - 1] : null
       const finalExtra = lastB && lastB.type === 'final' ? 8 : 0
@@ -223,66 +286,52 @@ export default function Game({ profile, room, onExit }) {
   })()
 
   const moves = useMemo(() => legalMoves(state.currentBid, state.maxCount), [state.currentBid, state.maxCount])
-  const back = room?.cardBack || null
 
-  // Table: when all batches fit we show rows (3 cards each) with the cards overlapping
-  // (half over the neighbour - the rank corner stays visible).
-  // Around the 5th rotation the table collapses into a realistic pile (unless the
-  // "Wyłącz kupkę" option is on - then the rows keep squeezing together instead);
-  // a click on the pile opens a popup with the exact cards.
-  const showPileOnly = !opts.noPile && state.tableBatches.length > fit.rows
+  // "Kupka" switch: ON = batch rows while they fit, then the readable pile
+  // (rank corners visible at a glance, click = popup); OFF = cards spread
+  // left to right, each showing its corner strip (~1/4 of the card)
+  const pileMode = !!opts.pile
+  const showPileOnly = pileMode && state.tableBatches.length > fit.rows
   const hiddenCards = state.tableCards
 
-  // pile geometry - in root pixels (cards scale with the root font size).
-  // Compact by default is a tidy little stack (it is clickable anyway); the
-  // "Czytelna kupka" option (on by default) spreads it with md cards and steps
-  // big enough that every rank corner stays visible without opening the popup.
+  // table geometry - in root pixels (cards scale with the root font size)
   const n = hiddenCards.length
   const availH = fit.avail || 130
-  const readable = !!opts.readablePile
-  let pcols, prows, pstepX, pstepY, pileW, pileH
-  if (readable) {
-    const pcW = 56 * s
-    const pcH = 80 * s
-    const stepXw = 18 * s // shows the rank glyph of every card
-    const stepYw = 26 * s // shows the whole rank corner of every row
-    const maxRowsH = Math.max(1, Math.floor((availH - pcH - 8 * s) / stepYw) + 1)
-    const maxColsW = Math.max(4, Math.floor((vw * 0.92 - pcW - 8 * s) / stepXw) + 1)
-    // prefer a ~6 column stack (like the compact pile), grow when height demands it
-    const wanted = Math.max(Math.min(6, n), Math.ceil(n / maxRowsH))
-    pcols = Math.max(1, Math.min(wanted, maxColsW))
-    prows = Math.max(1, Math.ceil(n / pcols))
-    pstepX = stepXw
-    pstepY = prows > 1 ? Math.max(6, Math.min(stepYw, (availH - pcH - 8 * s) / (prows - 1))) : 0
-    pileW = (pcols - 1) * pstepX + pcW + 8 * s
-    pileH = (prows - 1) * pstepY + pcH + 8 * s
-  } else {
-    pcols = 6
-    prows = Math.max(1, Math.ceil(n / pcols))
-    pstepX = 14 * s
-    pstepY = prows > 1 ? Math.max(3, Math.min(14, Math.floor(18 / (prows - 1)))) * s : 0
-    pileW = (pcols - 1) * pstepX + (40 + 8) * s
-    pileH = (prows - 1) * pstepY + (56 + 8) * s
-  }
 
-  // rows are FULL width (no side overlap) and stack top-down: a new row covers
-  // the one above by half (up to 75% when space is tight - rank corners stay
-  // visible). With "Wyłącz kupkę" the stack squeezes harder when it outgrows
-  // the space (rows keep the newest ones fully visible, the rest clip from below).
-  const batchCount = state.tableBatches.length
-  let rowStride = fit.rowH * (1 - fit.cover)
-  if (opts.noPile && batchCount > 1 && fit.avail > 0) {
-    const need = fit.rowH + (batchCount - 1) * rowStride
-    if (need > fit.avail) {
-      const availStride = (fit.avail - fit.rowH) / (batchCount - 1)
-      rowStride = Math.max(fit.rowH * 0.15, Math.min(rowStride, availStride))
-    }
-  }
-  // the flex gap-2 between rows is subtracted so the final stride stays exact
+  // readable pile: adaptive columns (~6 preferred), every row shows the whole
+  // rank corner; lg cards when the stage is tall enough, md otherwise
+  const pileLg = !narrow && availH >= 156 // 112 card + 8 padding + 36 corner strip
+  const pcW = (pileLg ? 80 : 56) * s
+  const pcH = (pileLg ? 112 : 80) * s
+  const pstepXw = (pileLg ? 26 : 18) * s // shows the rank glyph of every card
+  const pstepYw = (pileLg ? 36 : 26) * s // shows the whole rank corner of every row
+  const maxRowsH = Math.max(1, Math.floor((availH - pcH - 8 * s) / pstepYw) + 1)
+  const maxColsW = Math.max(4, Math.floor((vw * 0.92 - pcW - 8 * s) / pstepXw) + 1)
+  // prefer a ~6 column stack, grow when the height demands more rows
+  const pcols = Math.max(1, Math.min(Math.max(Math.min(6, n), Math.ceil(n / maxRowsH)), maxColsW))
+  const prows = Math.max(1, Math.ceil(n / pcols))
+  const pstepX = pstepXw
+  const pstepY = prows > 1 ? Math.max(6 * s, Math.min(pstepYw, (availH - pcH - 8 * s) / (prows - 1))) : 0
+  const pileW = (pcols - 1) * pstepX + pcW + 8 * s
+  const pileH = (prows - 1) * pstepY + pcH + 8 * s
+
+  // spread (pile OFF): lg cards from left to right, each covering the previous
+  // one down to its corner strip; a second row covers the first ~3/4 from below
+  const spW = 80 * s
+  const spH = 112 * s
+  const spStepX = 24 * s // keeps the corner strip (rank + suit) of every card visible
+  const spCols = Math.max(1, Math.min(n, Math.floor((vw * 0.94 - spW - 8 * s) / spStepX) + 1))
+  const spRows = Math.max(1, Math.ceil(n / spCols))
+  const spStepY = spRows > 1 ? Math.max(spH * 0.16, Math.min(spH * 0.28, (availH - spH - 8 * s) / (spRows - 1))) : 0
+  const spreadW = (spCols - 1) * spStepX + spW + 8 * s
+  const spreadH = (spRows - 1) * spStepY + spH + 8 * s
+
+  // batch rows are FULL width and stack top-down: a new row covers the one
+  // above by half (up to 75% when space is tight - rank corners stay visible)
+  const rowStride = fit.rowH * (1 - fit.cover)
   const rowMargin = rowStride - fit.rowH - 8 * s
 
   // ---- local demo AI: when it is someone else's turn, "think" then act ----
-  // (online bots are driven by the server - this effect only runs in local mode)
   useEffect(() => {
     if (online) return
     if (state.phase !== 'bid') return
@@ -317,6 +366,23 @@ export default function Game({ profile, room, onExit }) {
     return () => clearTimeout(t)
   }, [reveal])
 
+  // ---- turn alerts (Opcje > "Alarm ruchu"): chime on your move + favicon blink ----
+  // silenced while the check overlay owns the screen - no competing alerts
+  const prevTurnRef = useRef(false)
+  useEffect(() => {
+    if (!opts.turnAlert) {
+      prevTurnRef.current = yourTurn
+      setTurnFlash(false)
+      return
+    }
+    if (yourTurn && !prevTurnRef.current && !state.checkResult && (document.hidden || !document.hasFocus())) playTurnChime()
+    prevTurnRef.current = yourTurn
+    // blink only while the table is actually visible (no overlay covering it)
+    setTurnFlash(yourTurn && !state.checkResult)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [yourTurn, state.checkResult, opts.turnAlert])
+  useEffect(() => () => setTurnFlash(false), []) // screen closed - icon back to normal
+
   const handleBid = () => {
     if (!selected || !isLegal(state.currentBid, selected.count, selected.value, state.maxCount)) return
     send({ type: 'BID', ...selected })
@@ -329,9 +395,8 @@ export default function Game({ profile, room, onExit }) {
     setSelected(null)
   }
 
-  // The players array is one clockwise ring starting at me. Render the opponents
-  // in that ring order and drop them on seats sorted clockwise from the bottom
-  // (where I sit) - so the turn order always matches the picture on every layout.
+  // opponents rendered in ring order on seats sorted clockwise from me,
+  // so the turn order always matches the picture on every layout
   const allPlayers = state.players
   const youIdx = allPlayers.findIndex((p) => p.isYou)
   const opponents =
@@ -352,6 +417,7 @@ export default function Game({ profile, room, onExit }) {
   }
 
   return (
+    <DeckContext.Provider value={deck}>
     <div className="h-[100dvh] felt flex flex-col overflow-hidden relative select-none">
       {/* ---------- Header ---------- */}
       <header className="flex items-center gap-3 sm:gap-5 px-3 sm:px-5 py-2 bg-slate-950/60 border-b border-amber-500/20 backdrop-blur z-30 shrink-0">
@@ -402,6 +468,14 @@ export default function Game({ profile, room, onExit }) {
         </button>
         <button
           type="button"
+          onClick={() => setShowOpts(true)}
+          className="text-slate-400 hover:text-amber-300 transition-colors"
+          title="Ustawienia"
+        >
+          <SettingsIcon size={17} />
+        </button>
+        <button
+          type="button"
           onClick={() => {
             if (online) socket.emit('table:leave')
             onExit()
@@ -415,14 +489,13 @@ export default function Game({ profile, room, onExit }) {
 
       {/* ---------- Table stage ---------- */}
       <main className="relative flex-1 min-h-0 overflow-hidden">
-        {/* popup: a window in the top-left (starting about at the middle of the deck)
-            so it never blocks the cards landing in the centre. Auto-hides, never blocks
-            clicks - kept big so the 3 seconds are enough to see the cards. */}
+        {/* popup with the cards of a full rotation - top-left so it never blocks
+            the centre; pointer-events-none, auto-hides */}
         {reveal && (
           <div key={reveal.id} className="absolute left-[calc(4%+2rem)] top-[10%] z-20 pop-in pointer-events-none">
             <div className="rounded-2xl border border-amber-400/40 bg-slate-950/90 backdrop-blur-sm shadow-2xl px-4 py-2.5 flex flex-col items-center gap-2">
               <div className="text-sm uppercase tracking-widest text-amber-200 whitespace-nowrap">
-                Na stół trafia {reveal.cards.length === 3 ? '3 karty' : `${reveal.cards.length} kart`}
+                Na stół trafia {reveal.cards.length} {kartForm(reveal.cards.length)}
               </div>
               <div className="flex gap-2.5">
                 {reveal.cards.map((c, i) => (
@@ -444,7 +517,7 @@ export default function Game({ profile, room, onExit }) {
             <PlayingCard faceDown size="lg" back={back} />
           </div>
           <div className="text-[0.6875rem] text-slate-300 bg-slate-950/70 rounded-full px-2 py-0.5 border border-white/10">
-            {state.deck.length} kart
+            {state.deck.length} {kartForm(state.deck.length)}
           </div>
         </div>
 
@@ -458,10 +531,7 @@ export default function Game({ profile, room, onExit }) {
               className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-1 z-10"
               style={{ left: `${seat.left}%`, top: `${seat.top}%` }}
             >
-              {/* card backs held behind the avatar (phone: replaced by the count badge).
-                  Cards always face the table; the fan shows how many are held.
-                  transform: translate/rotate are separate CSS properties and do not
-                  clash with the deal-in animation. */}
+              {/* card backs fanned behind the avatar (phone: replaced by the count badge) */}
               <div className="relative">
                 {!narrow &&
                   !p.isEliminated &&
@@ -473,9 +543,8 @@ export default function Game({ profile, room, onExit }) {
                         key={k}
                         className="absolute left-1/2 top-1/2 deal-in"
                         style={{
-                          // card bottoms meet just below the avatar centre (avatar "holds" the fan);
-                          // rotation around that shared point spreads the tops wide, low twist
-                          // smaller scale (1.05) and deeper anchor (+15px) = cards sit tighter behind avatar
+                          // bottoms meet just below the avatar centre - rotation
+                          // around that point spreads the tops into a fan
                           translate: '-50% calc(-100% + 0.9375rem)',
                           transformOrigin: '50% 100%',
                           rotate: `${angle}deg`,
@@ -509,18 +578,28 @@ export default function Game({ profile, room, onExit }) {
                   )}
                 </div>
 
-                {/* phone: card count badge on the avatar corner - the nick gets the full block width */}
-                {narrow && !p.isEliminated && (
-                  <span className="absolute -top-2 -right-3 z-20 text-[0.625rem] font-bold text-slate-300 bg-slate-950/80 border border-white/15 rounded-full px-1.5 py-px leading-none shadow">
+                {/* card count badge: shows hand size near his avatar */}
+                {(narrow || opts.bigCount) && !p.isEliminated && (
+                  <span
+                    className={`absolute z-20 font-bold text-slate-300 bg-slate-950/80 border border-white/15 rounded-full leading-none shadow ${
+                      opts.bigCount ? 'text-sm sm:text-base px-2 py-0.5 border-white/25' : 'text-[0.625rem] px-1.5 py-px'
+                    } ${narrow ? 'bottom-2 -right-2' : '-top-[10px] -right-[30px]'}`}
+                  >
                     {'\u{1F0A0}'}&#215;{p.cardsCount}
+                  </span>
+                )}
+                {/* dropped connection: red badge at the top left */}
+                {p.connected === false && (
+                  <span
+                    title="Brak połączenia - chwilowo gra za tego prowadzi bot"
+                    className="absolute -top-[5px] -left-[3px] z-20 rounded-full bg-red-500/90 p-1 shadow"
+                  >
+                    <WifiOff size={narrow ? 11 : 13} className="text-white" />
                   </span>
                 )}
               </div>
 
-              {/* nick (mt-2 clears the TERAZ badge); nicks are capped at 14 chars on input
-                  so the full name always fits; eliminated = grey avatar + red nick, no chips.
-                  The seat block ends at the nick - no extra row, so the bottom-corner seats
-                  sit lower without clipping at the stage edge (the TERAZ badge shows the turn). */}
+              {/* nick; eliminated = grey avatar + red nick */}
               <div className={`flex items-center gap-1.5 mt-2 ${narrow ? 'max-w-[4.625rem]' : 'max-w-[6.875rem]'}`}>
                 <span className={`text-[0.6875rem] sm:text-xs font-semibold truncate min-w-0 ${p.isEliminated ? 'text-red-400/90' : 'text-white'}`}>
                   {p.name}
@@ -535,7 +614,7 @@ export default function Game({ profile, room, onExit }) {
           <div
             ref={batchesRef}
             className={`flex-1 min-h-0 w-full flex flex-col items-center gap-2 overflow-hidden pointer-events-auto ${
-              state.tableBatches.length === 0 || showPileOnly ? 'justify-center' : 'justify-start'
+              state.tableBatches.length === 0 || showPileOnly || !pileMode ? 'justify-center' : 'justify-start'
             }`}
           >
             {state.tableBatches.length === 0 ? (
@@ -543,7 +622,7 @@ export default function Game({ profile, room, onExit }) {
                 Tu pojawią się karty ze stołu
               </div>
             ) : showPileOnly ? (
-              /* too many rows - the whole table as one realistic pile (click = popup with every card) */
+              /* too many rows - the readable pile (click = popup) */
               <>
                 <button
                   type="button"
@@ -570,7 +649,45 @@ export default function Game({ profile, room, onExit }) {
                           animationDelay: `${Math.min(i, 8) * 45}ms`,
                         }}
                       >
-                        <PlayingCard card={c} size={readable ? 'md' : 'sm'} />
+                        <PlayingCard card={c} size={pileLg ? 'lg' : 'md'} />
+                      </span>
+                    )
+                  })}
+                  <span className="absolute top-0.5 right-0.5 z-50 text-[0.625rem] font-bold bg-amber-400 text-slate-900 rounded-full px-1.5 py-0.5 shadow-md leading-none">
+                    {hiddenCards.length}
+                  </span>
+                </button>
+                <div className="text-[0.5625rem] text-slate-300/70">kliknij, żeby zobaczyć jakie są</div>
+              </>
+            ) : !pileMode ? (
+              /* pile off - cards spread left to right (click = popup) */
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowPile(true)}
+                  title="Pokaż karty ze stołu"
+                  className="relative"
+                  style={{ width: spreadW, height: spreadH }}
+                >
+                  {hiddenCards.map((c, i) => {
+                    const col = i % spCols
+                    const row = Math.floor(i / spCols)
+                    const jx = ((i * 37) % 5) - 2
+                    const jy = ((i * 53) % 3) - 1
+                    const rot = ((i * 29) % 13) - 6
+                    return (
+                      <span
+                        key={c.id}
+                        className="absolute deal-in"
+                        style={{
+                          left: col * spStepX + jx,
+                          top: row * spStepY + jy,
+                          transform: `rotate(${rot}deg)`,
+                          zIndex: i,
+                          animationDelay: `${Math.min(i, 8) * 45}ms`,
+                        }}
+                      >
+                        <PlayingCard card={c} size="lg" />
                       </span>
                     )
                   })}
@@ -609,19 +726,20 @@ export default function Game({ profile, room, onExit }) {
             )}
           </div>
 
-          {/* your hand - cards lying in front of you (always fits, never scrolls).
-              On the phone it starts collapsed (only the card tops show); tapping it
-              expands the hand so the table stays easy to see. */}
+          {/* your hand - on the phone it starts collapsed, tap to expand */}
           <div
             className={`pointer-events-auto flex flex-col items-center gap-0.5 pb-1 ${narrow ? 'w-full cursor-pointer' : ''}`}
             onClick={() => {
               if (narrow && !you.isEliminated) setHandOpen((o) => !o)
             }}
           >
-            <div className="text-[0.625rem] uppercase tracking-widest text-amber-200/80 drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)] flex items-center gap-1">
-              Twoja ręka: {you.isEliminated ? 'koniec' : `${you.hand.length} kart`}
-              {narrow && !you.isEliminated && <span>{handOpen ? '\u25B2' : '\u25BC'}</span>}
-            </div>
+            {/* the count label is gone - on the phone only the chevron stays
+                (tap the area to unfold the hand) */}
+            {narrow && !you.isEliminated && (
+              <div className="flex items-center justify-center text-amber-200/80 drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)] text-[0.625rem]">
+                {handOpen ? '\u25B2' : '\u25BC'}
+              </div>
+            )}
             <div
               className={`flex justify-center px-2 ${
                 narrow ? `overflow-hidden transition-all duration-200 ${handOpen ? 'max-h-[9.375rem] items-end' : 'max-h-8 items-start'}` : 'items-end'
@@ -768,8 +886,10 @@ export default function Game({ profile, room, onExit }) {
       {state.checkResult && (
         <CheckOverlay
           state={state}
-          canRestart={!online || state.room?.hostId === profile?.youId}
+          back={back}
+          canRestart={isHostGame}
           instantGo={online}
+          endsAt={roundEndsAt}
           onNext={() => send({ type: 'NEXT_ROUND' })}
           onRestart={() => send({ type: 'RESTART' })}
         />
@@ -788,7 +908,7 @@ export default function Game({ profile, room, onExit }) {
               <div>
                 <div className="text-[0.6875rem] uppercase tracking-widest text-amber-300/80">Karty na stole</div>
                 <div className="text-lg font-bold text-white">
-                  {hiddenCards.length} kart - wszystkie
+                  {hiddenCards.length} {kartForm(hiddenCards.length)} - wszystkie
                 </div>
               </div>
               <button
@@ -806,7 +926,7 @@ export default function Game({ profile, room, onExit }) {
                   <PlayingCard
                     key={c.id}
                     card={c}
-                    size="md"
+                    size="xl"
                     highlight={c.isJoker || c.value === state.currentBid?.value}
                   />
                 ))}
@@ -816,6 +936,8 @@ export default function Game({ profile, room, onExit }) {
         </div>
       )}
       {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+      {showOpts && <SettingsModal onClose={() => setShowOpts(false)} />}
     </div>
+    </DeckContext.Provider>
   )
 }

@@ -71,6 +71,12 @@ while (s.phase !== 'gameOver' && guard++ < 60) {
   if (el.length > 0 && guard === 1) {
     console.log('  eliminacja nastąpiła:', el.map(p => `${p.name} (${p.cardsCount})`).join(', '))
   }
+  // karty przegrywającego MUSZĄ być w odsłoniętych rękach także wtedy,
+  // gdy ta runda go wyrzuca z gry (checkResult.hands)
+  if (s.checkResult && s.checkResult.isEliminated) {
+    const lh = s.checkResult.hands.find(h => h.id === s.checkResult.loserId)
+    assert(!!lh && lh.hand.length > 0, 'karty wyeliminowanego są w checkResult.hands (' + (lh ? lh.hand.length : 'BRAK') + ')')
+  }
 }
 assert(s.phase === 'gameOver', 'gra się kończy: ' + s.phase)
 assert(s.players.filter(p => !p.isEliminated).length === 1, 'zostaje 1 zwycięzca')

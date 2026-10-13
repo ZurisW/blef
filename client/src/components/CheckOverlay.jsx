@@ -7,7 +7,7 @@ import Avatar from './Avatar'
 // 0 -> "SPRAWDZAM!" banner, 1 -> revealed hands + the table cards (cards view only, everything
 // fits on screen without scrolling), 2 -> the normal verdict stage: counting, win/lose and the
 // next-round button, pinned to the bottom.
-export default function CheckOverlay({ state, onNext, onRestart, canRestart = true, instantGo = false }) {
+export default function CheckOverlay({ state, onNext, onRestart, canRestart = true, instantGo = false, endsAt = 0, back = null }) {
   const r = state.checkResult
   const [stage, setStage] = useState(0)
   const [rev, setRev] = useState(0) // how many of the final cards already flipped
@@ -17,7 +17,7 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
     if (!r) return
     setStage(0)
     const t1 = setTimeout(() => setStage(1), 650)
-    const t2 = setTimeout(() => setStage(2), 3000) // verdict only after a good look at the cards
+    const t2 = setTimeout(() => setStage(2), 2000) // verdict after a good look at the cards
     return () => {
       clearTimeout(t1)
       clearTimeout(t2)
@@ -63,20 +63,27 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
   }, [stage, r, state.phase])
 
   // Multiplayer: the loser starts the next round, so THEY click.
-  // After the click -> 3 s and a new round; without a click -> auto after 5 s.
-  // Countdown starts with the cards (stage 1) so the numbers already track the server
-  // timer when the buttons appear at stage 2.
-  const [left, setLeft] = useState(5)
+  // The countdown mirrors the server deadline passed as the endsAt prop
+  // (10 s auto, 2 s after the click - touching checkResult would restart the
+  // overlay); local demo runs its own timer.
+  const [left, setLeft] = useState(10)
   const [goClicked, setGoClicked] = useState(false)
   useEffect(() => {
     if (stage !== 1 || !r || state.phase !== 'roundEnd') return
     setGoClicked(false)
-    // the countdown mirrors the server delay: everyone advances after 5 s without a click
-    setLeft(5)
   }, [stage, r, state.phase])
 
   useEffect(() => {
     if (stage < 1 || !r || state.phase !== 'roundEnd') return
+    if (endsAt) {
+      // online: tick against the server deadline, never fire early; the number
+      // never drops below 1 (the overlay disappears on the server's advance)
+      const tick = () => setLeft(Math.max(1, Math.ceil((endsAt - Date.now()) / 1000)))
+      tick()
+      const iv = setInterval(tick, 250)
+      return () => clearInterval(iv)
+    }
+    // local demo: 10 s auto, 2 s after the click
     if (left <= 0) {
       onNext()
       return
@@ -84,7 +91,7 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
     const t = setTimeout(() => setLeft((l) => l - 1), 1000)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [left, stage, r, state.phase])
+  }, [left, stage, r, state.phase, endsAt])
 
   if (!r) return null
 
@@ -159,7 +166,7 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
                       highlight={hl(c)}
                     />
                   ) : (
-                    <PlayingCard faceDown size="md" back={state.room?.cardBack || null} />
+                    <PlayingCard faceDown size="md" back={back} />
                   )}
                 </span>
               ))}
@@ -231,10 +238,8 @@ export default function CheckOverlay({ state, onNext, onRestart, canRestart = tr
                         type="button"
                         onClick={() => {
                           setGoClicked(true)
-                          setLeft(3)
-                          // online the server starts its 3 s window right away;
-                          // local demo waits for the countdown below
-                          if (instantGo) onNext()
+                          setLeft(2)
+                          if (instantGo) onNext() // online: the server starts its 2 s window
                         }}
                         className="w-full py-2.5 rounded-xl btn-primary text-white font-bold text-lg transition-colors"
                       >

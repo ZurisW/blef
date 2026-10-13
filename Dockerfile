@@ -2,7 +2,7 @@
 FROM node:20-alpine AS client
 WORKDIR /app/client
 COPY client/package.json client/package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 COPY client/ ./
 # vite outDir is ../dist -> /app/dist
 RUN npm run build
@@ -15,7 +15,7 @@ WORKDIR /app
 
 # server dependencies (production only)
 COPY server/package.json server/package-lock.json ./server/
-RUN cd server && npm ci --omit=dev
+RUN cd server && npm ci --omit=dev --no-audit --no-fund
 
 COPY server/ ./server/
 # the server serves ../dist and imports the shared engine from ../client/src/lib

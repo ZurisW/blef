@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Copy, Check, Crown, LogOut, Play, Settings, X, Link2 } from 'lucide-react'
+import { Copy, Check, Crown, LogOut, Play, Settings, X, Link2, WifiOff } from 'lucide-react'
 import Avatar from '../components/Avatar'
 import SettingsModal from '../components/SettingsModal.jsx'
 import { BOTS } from '../lib/bots.js'
@@ -26,6 +26,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
   const [backKind, setBackKind] = useState(() => loadSettings().backKind || 'preset')
   const [backPreset, setBackPreset] = useState(() => loadSettings().backPreset || 'gold')
   const [backUrl, setBackUrl] = useState(() => loadSettings().backUrl || '')
+  const [deckName, setDeckName] = useState(() => loadSettings().deckName || '')
   const [showSettings, setShowSettings] = useState(false) // settings popup (gear)
 
   // the shared settings modal owns the card-back UI and reports changes here,
@@ -46,11 +47,11 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
   // remember the choice (no need to re-set on every visit)
   useEffect(() => {
     try {
-      localStorage.setItem('blef.lobby', JSON.stringify({ decks, backKind, backPreset, backUrl }))
+      localStorage.setItem('blef.lobby', JSON.stringify({ decks, backKind, backPreset, backUrl, deckName }))
     } catch {
       /* e.g. dataURL too large - skip */
     }
-  }, [decks, backKind, backPreset, backUrl])
+  }, [decks, backKind, backPreset, backUrl, deckName])
 
   // switching decks - dropping to 1 deck keeps max 5 players (you + 4)
   const changeDecks = (d) => {
@@ -74,37 +75,25 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
   useEffect(() => {
     if (!online) return
     const onTable = (t) => {
+      if (t.code !== room.code) return // updates can only concern our table
       setTable(t)
       setDecks(t.decks)
       setPlayers(t.players.map((p) => ({ ...p, isYou: p.id === youId })))
-      if (t.cardBack) {
-        setBackKind(t.cardBack.kind)
-        if (t.cardBack.kind === 'url') setBackUrl(t.cardBack.value)
-        else setBackPreset(t.cardBack.value)
-      }
       if (t.status === 'game' && !startedRef.current) {
         startedRef.current = true
-        onStart({ decks: t.decks, cardBack: t.cardBack, players: t.players })
+        onStart({ decks: t.decks, players: t.players })
       }
     }
     socket.on('table:update', onTable)
     emitAck('table:sync').then((res) => {
+      // a sync answer for another table means our binding is stale - bail out
+      if (res.ok && res.table && res.table.code !== room.code) return onLeave()
       if (res.ok) onTable(res.table)
       else onLeave() // room vanished (e.g. server restart) - back to the main menu
     })
     return () => socket.off('table:update', onTable)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [online])
-
-  // the host's card back travels with the table (guarded so it settles after one round-trip)
-  useEffect(() => {
-    if (!online || !isHost || !table) return
-    const cardBack =
-      backKind === 'url' && backUrl.trim() ? { kind: 'url', value: backUrl.trim() } : { kind: 'preset', value: backPreset }
-    const same = table.cardBack && table.cardBack.kind === cardBack.kind && table.cardBack.value === cardBack.value
-    if (same) return
-    emitAck('table:settings', { cardBack })
-  }, [backKind, backPreset, backUrl, table, online, isHost])
 
   // bots - picked at random from the pool, on demand
   const addBot = () => {
@@ -179,11 +168,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
       emitAck('table:start') // server flips status -> table:update carries us into the game
       return
     }
-    const cardBack =
-      backKind === 'url' && backUrl.trim()
-        ? { kind: 'url', value: backUrl.trim() }
-        : { kind: 'preset', value: backPreset }
-    onStart({ decks, cardBack, players })
+    onStart({ decks, players })
   }
 
   const half = seatCount > 5 // 10 seats = 2 columns of 5, rows half as tall
@@ -284,6 +269,9 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
                   } ${p.isYou ? 'border-amber-400/50' : 'border-white/10'}`}
                 >
                   <Avatar value={p.avatar} className={`${half ? 'w-5 h-5 text-sm' : 'w-7 h-7 text-lg'} shrink-0`} />
+                  {p.connected === false && (
+                    <WifiOff size={half ? 12 : 14} className="text-red-400 shrink-0" title="Brak połączenia" />
+                  )}
                   <span
                     className={`font-semibold truncate min-w-0 ${half ? 'text-[0.6875rem]' : 'text-sm'} ${
                       p.isYou ? 'text-amber-300' : 'text-slate-100'
@@ -354,7 +342,7 @@ export default function Lobby({ profile, room, onStart, onLeave }) {
         <SettingsModal
           onClose={() => setShowSettings(false)}
           onBackChange={handleBackChange}
-          backLocked={online && !isHost}
+          onDeckChange={setDeckName}
         />
       )}
     </div>
